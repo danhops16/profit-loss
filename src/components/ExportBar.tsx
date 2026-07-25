@@ -1,5 +1,7 @@
 import { useId, useRef, useState } from 'react'
 import type { PlannerState } from '../types'
+import { buildActiveScenarioCsv, csvFilename, downloadTextFile } from '../utils/csvExport'
+import { getActiveScenario } from '../utils/defaults'
 import { parsePlannerJson } from '../utils/validatePlannerState'
 
 interface ExportBarProps {
@@ -20,10 +22,18 @@ export function ExportBar({ state, onImport, onReset }: ExportBarProps) {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${state.businessName.replace(/\s+/g, '-').toLowerCase() || 'planner'}-year1.json`
+    const scenario = getActiveScenario(state)
+    a.download = `${state.businessName.replace(/\s+/g, '-').toLowerCase() || 'planner'}-${scenario.name.replace(/\s+/g, '-').toLowerCase()}-year1.json`
     a.click()
     URL.revokeObjectURL(url)
     setStatus({ tone: 'success', message: 'Plan exported as JSON.' })
+  }
+
+  const exportCsv = () => {
+    const scenario = getActiveScenario(state)
+    const csv = buildActiveScenarioCsv(state, scenario)
+    downloadTextFile(csvFilename(state, scenario), csv, 'text/csv;charset=utf-8')
+    setStatus({ tone: 'success', message: 'Active scenario exported as CSV.' })
   }
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -73,6 +83,9 @@ export function ExportBar({ state, onImport, onReset }: ExportBarProps) {
       <div className="export-actions">
         <button type="button" className="btn btn--ghost" onClick={exportJson}>
           Export JSON
+        </button>
+        <button type="button" className="btn btn--ghost" onClick={exportCsv}>
+          Export CSV
         </button>
         <button
           type="button"

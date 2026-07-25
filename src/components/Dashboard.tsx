@@ -1,40 +1,79 @@
-import type { MonthSummary } from '../types'
-import { buildMetrics, formatCurrency } from '../utils/calculations'
+import type { CurrencyCode, MonthSummary } from '../types'
+import type { PlannerMetrics } from '../utils/calculations'
+import { formatMargin, formatMoney } from '../utils/formatMoney'
 
 interface DashboardProps {
   businessName: string
+  currency: CurrencyCode
   summaries: MonthSummary[]
-  startingCash: number
+  metrics: PlannerMetrics
 }
 
-export function Dashboard({ businessName, summaries, startingCash }: DashboardProps) {
-  const metrics = buildMetrics(summaries, startingCash)
-
+export function Dashboard({ businessName, currency, metrics }: DashboardProps) {
   return (
     <section className="dashboard" aria-label="Year one snapshot">
       <h2>{businessName || 'Your startup'} — year one snapshot</h2>
+      <p className="cash-timing-note">
+        Cash assumes revenue and expenses are paid in the same month they appear in
+        the forecast.
+      </p>
       <div className="stat-grid">
-        <StatCard label="Total revenue" value={formatCurrency(metrics.totalRevenue)} variant="positive" />
-        <StatCard label="Total expenses" value={formatCurrency(metrics.totalExpenses)} variant="negative" />
+        <StatCard label="Total revenue" value={formatMoney(metrics.totalRevenue, currency)} variant="positive" />
+        <StatCard label="COGS" value={formatMoney(metrics.totalCogs, currency)} variant="negative" />
+        <StatCard
+          label="Gross profit"
+          value={formatMoney(metrics.grossProfit, currency)}
+          variant={metrics.grossProfit >= 0 ? 'positive' : 'negative'}
+        />
+        <StatCard
+          label="Gross margin"
+          value={formatMargin(metrics.grossMargin)}
+          variant="neutral"
+          small
+        />
+        <StatCard
+          label="Operating expenses"
+          value={formatMoney(metrics.operatingExpenses, currency)}
+          variant="negative"
+        />
         <StatCard
           label="Net profit / loss"
-          value={formatCurrency(metrics.yearNet)}
+          value={formatMoney(metrics.yearNet, currency)}
           variant={metrics.yearNet >= 0 ? 'positive' : 'negative'}
         />
         <StatCard
+          label="Net margin"
+          value={formatMargin(metrics.netMargin)}
+          variant="neutral"
+          small
+        />
+        <StatCard
           label="Cash at year end"
-          value={formatCurrency(metrics.endingCash)}
+          value={formatMoney(metrics.endingCash, currency)}
           variant="neutral"
         />
         <StatCard
           label="Lowest cash balance"
-          value={formatCurrency(metrics.lowestCash)}
+          value={
+            metrics.lowestCashMonthLabel
+              ? `${formatMoney(metrics.lowestCash, currency)} (${metrics.lowestCashMonthLabel})`
+              : formatMoney(metrics.lowestCash, currency)
+          }
           variant={metrics.lowestCash < 0 ? 'negative' : 'neutral'}
+          small
         />
         <StatCard
-          label="Months operating at a loss"
-          value={String(metrics.monthsAtLoss)}
-          variant={metrics.monthsAtLoss > 6 ? 'negative' : 'neutral'}
+          label="Cash runway"
+          value={metrics.runwayLabel}
+          variant={
+            metrics.runwayLabel === '12+ months'
+              ? 'positive'
+              : metrics.runwayMonths === 0
+                ? 'negative'
+                : 'neutral'
+          }
+          small
+          hint="Complete months with non-negative ending cash before the first negative month"
         />
         <StatCard
           label="First profitable month"
@@ -44,23 +83,21 @@ export function Dashboard({ businessName, summaries, startingCash }: DashboardPr
           hint="First month where net profit is greater than zero"
         />
         <StatCard
-          label="Average monthly loss"
-          value={formatCurrency(metrics.averageMonthlyLoss)}
-          variant="neutral"
-          hint="Average absolute net in months that lost money"
+          label="First negative cash month"
+          value={metrics.firstNegativeCashMonthLabel ?? 'None in year 1'}
+          variant={metrics.firstNegativeCashMonthLabel ? 'negative' : 'positive'}
+          small
         />
         <StatCard
-          label="Cash runway"
-          value={metrics.runwayLabel}
-          variant={
-            metrics.runwayLabel === '12+ months'
-              ? 'positive'
-              : metrics.runwayLabel === 'Already negative'
-                ? 'negative'
-                : 'neutral'
-          }
-          small
-          hint="First month ending cash is negative, or 12+ months if it stays non-negative"
+          label="Average monthly loss"
+          value={formatMoney(metrics.averageMonthlyLoss, currency)}
+          variant="neutral"
+          hint="Average absolute net in months that lost money (not cash burn)"
+        />
+        <StatCard
+          label="Months operating at a loss"
+          value={String(metrics.monthsAtLoss)}
+          variant={metrics.monthsAtLoss > 6 ? 'negative' : 'neutral'}
         />
       </div>
     </section>

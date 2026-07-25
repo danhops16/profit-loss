@@ -1,16 +1,20 @@
-import type { LineItem } from '../types'
-import { formatCurrency, resolveAmounts } from '../utils/calculations'
+import type { ExpenseCategory, ExpenseLineItem, LineItem } from '../types'
+import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_LABELS } from '../types'
+import { resolveAmounts } from '../utils/calculations'
+import { formatMoney } from '../utils/formatMoney'
+import type { CurrencyCode } from '../types'
 
 interface LineItemSectionProps {
   title: string
   kind: 'revenue' | 'expenses'
-  items: LineItem[]
+  items: LineItem[] | ExpenseLineItem[]
   accent: 'green' | 'red'
   monthLabels: string[]
-  presets?: string[]
-  onAdd: (name?: string) => void
+  currency: CurrencyCode
+  presets?: Array<{ name: string; category?: ExpenseCategory }>
+  onAdd: (name?: string, category?: ExpenseCategory) => void
   onRemove: (id: string) => void
-  onUpdate: (id: string, patch: Partial<LineItem>) => void
+  onUpdate: (id: string, patch: Partial<LineItem | ExpenseLineItem>) => void
 }
 
 export function LineItemSection({
@@ -19,6 +23,7 @@ export function LineItemSection({
   items,
   accent,
   monthLabels,
+  currency,
   presets = [],
   onAdd,
   onRemove,
@@ -31,14 +36,14 @@ export function LineItemSection({
       <div className="section-head">
         <h2 id={sectionId}>{title}</h2>
         <div className="section-actions">
-          {presets.map((name) => (
+          {presets.map((preset) => (
             <button
-              key={name}
+              key={preset.name}
               type="button"
               className="btn btn--ghost btn--sm"
-              onClick={() => onAdd(name)}
+              onClick={() => onAdd(preset.name, preset.category)}
             >
-              + {name}
+              + {preset.name}
             </button>
           ))}
           <button
@@ -61,6 +66,7 @@ export function LineItemSection({
               item={item}
               kind={kind}
               monthLabels={monthLabels}
+              currency={currency}
               canRemove={items.length > 1}
               onRemove={() => onRemove(item.id)}
               onUpdate={(patch) => onUpdate(item.id, patch)}
@@ -76,21 +82,24 @@ function LineItemCard({
   item,
   kind,
   monthLabels,
+  currency,
   canRemove,
   onRemove,
   onUpdate,
 }: {
-  item: LineItem
+  item: LineItem | ExpenseLineItem
   kind: 'revenue' | 'expenses'
   monthLabels: string[]
+  currency: CurrencyCode
   canRemove: boolean
   onRemove: () => void
-  onUpdate: (patch: Partial<LineItem>) => void
+  onUpdate: (patch: Partial<LineItem | ExpenseLineItem>) => void
 }) {
   const resolved = resolveAmounts(item)
   const yearlyTotal = resolved.reduce((a, b) => a + b, 0)
   const nameId = `line-name-${item.id}`
   const modeGroup = `mode-${item.id}`
+  const expense = kind === 'expenses' ? (item as ExpenseLineItem) : null
 
   return (
     <article className="line-card" aria-label={`${kind} line: ${item.name || 'Untitled'}`}>
@@ -106,7 +115,7 @@ function LineItemCard({
           onChange={(e) => onUpdate({ name: e.target.value })}
           placeholder="Line item name"
         />
-        <span className="line-yearly">{formatCurrency(yearlyTotal)}/yr</span>
+        <span className="line-yearly">{formatMoney(yearlyTotal, currency)}/yr</span>
         {canRemove && (
           <button
             type="button"
@@ -119,6 +128,25 @@ function LineItemCard({
           </button>
         )}
       </div>
+
+      {expense && (
+        <label className="inline-field category-field">
+          <span>Category</span>
+          <select
+            value={expense.category}
+            onChange={(e) =>
+              onUpdate({ category: e.target.value as ExpenseCategory })
+            }
+            aria-label={`Category for ${item.name || 'expense'}`}
+          >
+            {EXPENSE_CATEGORIES.map((cat) => (
+              <option key={cat} value={cat}>
+                {EXPENSE_CATEGORY_LABELS[cat]}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
 
       <fieldset className="fill-mode">
         <legend className="visually-hidden">How to fill monthly amounts</legend>
@@ -139,6 +167,15 @@ function LineItemCard({
             onChange={() => onUpdate({ fillMode: 'growth' })}
           />
           Growth %
+        </label>
+        <label>
+          <input
+            type="radio"
+            name={modeGroup}
+            checked={item.fillMode === 'one-time'}
+            onChange={() => onUpdate({ fillMode: 'one-time' })}
+          />
+          One-time
         </label>
         <label>
           <input
@@ -190,6 +227,38 @@ function LineItemCard({
                 onUpdate({ growthPercent: Number(e.target.value) || 0 })
               }
             />
+          </label>
+        </div>
+      )}
+
+      {item.fillMode === 'one-time' && (
+        <div className="inline-row">
+          <label className="inline-field">
+            <span>Amount</span>
+            <input
+              type="number"
+              min={0}
+              step={50}
+              value={item.uniformAmount || ''}
+              onChange={(e) =>
+                onUpdate({ uniformAmount: Number(e.target.value) || 0 })
+              }
+            />
+          </label>
+          <label className="inline-field">
+            <span>Forecast month</span>
+            <select
+              value={item.oneTimeMonth}
+              onChange={(e) =>
+                onUpdate({ oneTimeMonth: Number(e.target.value) })
+              }
+            >
+              {monthLabels.map((label, i) => (
+                <option key={label} value={i}>
+                  {label}
+                </option>
+              ))}
+            </select>
           </label>
         </div>
       )}

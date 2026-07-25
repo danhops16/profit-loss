@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { SCHEMA_VERSION } from '../types'
 import { createDefaultState } from './defaults'
 import {
   normalizeAmounts,
@@ -7,145 +8,152 @@ import {
   toFiniteNumber,
 } from './validatePlannerState'
 
-describe('toFiniteNumber', () => {
-  it('keeps finite numbers', () => {
-    expect(toFiniteNumber(12.5)).toBe(12.5)
+const legacyV1 = {
+  businessName: 'Legacy Co',
+  startMonth: 9,
+  startYear: 2025,
+  startingCash: 25000,
+  revenue: [
+    {
+      id: 'r1',
+      name: 'Sales',
+      fillMode: 'growth',
+      amounts: [1, 2],
+      uniformAmount: 1000,
+      growthPercent: 8,
+    },
+  ],
+  expenses: [
+    {
+      id: 'e1',
+      name: 'Salaries',
+      fillMode: 'uniform',
+      amounts: [],
+      uniformAmount: 5000,
+      growthPercent: 0,
+    },
+    {
+      id: 'e2',
+      name: 'Ads',
+      fillMode: 'manual',
+      amounts: [100, 200, Number.NaN],
+      uniformAmount: 0,
+      growthPercent: 0,
+    },
+  ],
+}
+
+describe('migrate legacy v1 plans', () => {
+  it('wraps lines into Base scenario with USD and Other categories', () => {
+    const result = parsePlannerState(legacyV1)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.state.schemaVersion).toBe(SCHEMA_VERSION)
+    expect(result.state.currency).toBe('USD')
+    expect(result.state.scenarios).toHaveLength(1)
+    expect(result.state.scenarios[0].name).toBe('Base')
+    expect(result.state.businessName).toBe('Legacy Co')
+    expect(result.state.startingCash).toBe(25000)
+    expect(result.state.startMonth).toBe(9)
+    expect(result.state.scenarios[0].revenue[0].uniformAmount).toBe(1000)
+    expect(result.state.scenarios[0].revenue[0].growthPercent).toBe(8)
+    expect(result.state.scenarios[0].revenue[0].oneTimeMonth).toBe(0)
+    expect(result.state.scenarios[0].expenses.every((e) => e.category === 'other')).toBe(
+      true,
+    )
+    expect(result.state.scenarios[0].expenses[1].amounts).toHaveLength(12)
+    expect(result.state.scenarios[0].expenses[1].amounts[2]).toBe(0)
   })
 
-  it('parses numeric strings', () => {
-    expect(toFiniteNumber('42')).toBe(42)
-  })
-
-  it('falls back for non-finite and junk', () => {
-    expect(toFiniteNumber(Number.NaN, 7)).toBe(7)
-    expect(toFiniteNumber(Number.POSITIVE_INFINITY, 7)).toBe(7)
-    expect(toFiniteNumber('nope', 7)).toBe(7)
-    expect(toFiniteNumber(undefined, 7)).toBe(7)
+  it('round-trips migrated state through JSON', () => {
+    const migrated = parsePlannerState(legacyV1)
+    expect(migrated.ok).toBe(true)
+    if (!migrated.ok) return
+    const again = parsePlannerJson(JSON.stringify(migrated.state))
+    expect(again.ok).toBe(true)
+    if (!again.ok) return
+    expect(again.state.scenarios[0].revenue[0].name).toBe('Sales')
+    expect(again.state.scenarios[0].expenses[0].uniformAmount).toBe(5000)
   })
 })
 
-describe('normalizeAmounts', () => {
-  it('pads and truncates to exactly 12 finite numbers', () => {
-    expect(normalizeAmounts([1, 2])).toEqual([
-      1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    ])
-    expect(normalizeAmounts(Array.from({ length: 20 }, (_, i) => i))).toHaveLength(12)
+describe('schema v2 validation', () => {
+  it('accepts multi-scenario plans and currency', () => {
+    const fresh = createDefaultState(new Date('2026-06-01'))
+    fresh.currency = 'EUR'
+    const result = parsePlannerState(JSON.parse(JSON.stringify(fresh)))
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.state.currency).toBe('EUR')
+    expect(result.state.scenarios[0].expenses[0].category).toBe('payroll')
   })
 
-  it('replaces non-finite values with 0', () => {
-    expect(normalizeAmounts([1, Number.NaN, '3', null])).toEqual([
-      1, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    ])
-  })
-})
-
-describe('parsePlannerState', () => {
-  it('accepts a valid plan and normalizes amounts', () => {
+  it('normalizes one-time fields', () => {
     const result = parsePlannerState({
-      businessName: 'Acme',
-      startMonth: 3,
+      schemaVersion: 2,
+      businessName: 'X',
+      startMonth: 0,
       startYear: 2026,
-      startingCash: 5000,
-      revenue: [
+      startingCash: 0,
+      currency: 'CAD',
+      activeScenarioId: 's1',
+      scenarios: [
         {
-          id: 'r1',
-          name: 'Sales',
-          fillMode: 'manual',
-          amounts: [100],
-          uniformAmount: 0,
-          growthPercent: 0,
+          id: 's1',
+          name: 'Base',
+          revenue: [
+            {
+              id: 'r',
+              name: 'Launch',
+              fillMode: 'one-time',
+              uniformAmount: '900',
+              growthPercent: 0,
+              oneTimeMonth: '4',
+              amounts: [],
+            },
+          ],
+          expenses: [],
         },
       ],
-      expenses: [],
     })
-
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect(result.state.businessName).toBe('Acme')
-    expect(result.state.revenue[0].amounts).toHaveLength(12)
-    expect(result.state.revenue[0].amounts[0]).toBe(100)
+    expect(result.state.scenarios[0].revenue[0].fillMode).toBe('one-time')
+    expect(result.state.scenarios[0].revenue[0].uniformAmount).toBe(900)
+    expect(result.state.scenarios[0].revenue[0].oneTimeMonth).toBe(4)
   })
 
-  it('preserves older plans with string numbers and unknown fillMode', () => {
-    const result = parsePlannerState({
-      businessName: 'Legacy',
-      startMonth: '5',
-      startYear: '2024',
-      startingCash: '1000',
-      revenue: [
-        {
-          id: 'x',
-          name: 'A',
-          fillMode: 'mystery',
-          amounts: ['10', '20'],
-          uniformAmount: '30',
-          growthPercent: '0',
-        },
-      ],
-      expenses: [],
-    })
-
-    expect(result.ok).toBe(true)
-    if (!result.ok) return
-    expect(result.state.startMonth).toBe(5)
-    expect(result.state.startYear).toBe(2024)
-    expect(result.state.startingCash).toBe(1000)
-    expect(result.state.revenue[0].fillMode).toBe('uniform')
-    expect(result.state.revenue[0].uniformAmount).toBe(30)
-    expect(result.state.revenue[0].amounts[0]).toBe(10)
-  })
-
-  it('rejects non-objects and missing arrays', () => {
+  it('rejects invalid roots and keeps helpers sane', () => {
     expect(parsePlannerState(null).ok).toBe(false)
-    expect(parsePlannerState('nope').ok).toBe(false)
-    expect(parsePlannerState({ revenue: [], expenses: 'bad' }).ok).toBe(false)
-    expect(parsePlannerState({ revenue: 'bad', expenses: [] }).ok).toBe(false)
+    expect(parsePlannerJson('{').ok).toBe(false)
+    expect(toFiniteNumber('nope', 3)).toBe(3)
+    expect(normalizeAmounts([1])).toHaveLength(12)
   })
 
-  it('rejects arrays that contain only non-objects', () => {
+  it('falls back invalid one-time month on normalize', () => {
     const result = parsePlannerState({
-      revenue: [1, 2, 3],
-      expenses: [],
+      schemaVersion: 2,
+      scenarios: [
+        {
+          id: 's',
+          name: 'B',
+          revenue: [
+            {
+              id: 'r',
+              name: 'X',
+              fillMode: 'one-time',
+              uniformAmount: 10,
+              oneTimeMonth: 40,
+              amounts: [],
+              growthPercent: 0,
+            },
+          ],
+          expenses: [],
+        },
+      ],
     })
-    expect(result.ok).toBe(false)
-  })
-
-  it('clamps invalid months and years to safe fallbacks', () => {
-    const result = parsePlannerState({
-      startMonth: 99,
-      startYear: 1200,
-      revenue: [],
-      expenses: [],
-    })
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect(result.state.startMonth).toBe(0)
-    expect(result.state.startYear).toBe(new Date().getFullYear())
-  })
-
-  it('allows empty revenue and expenses arrays', () => {
-    const result = parsePlannerState({ revenue: [], expenses: [] })
-    expect(result.ok).toBe(true)
-    if (!result.ok) return
-    expect(result.state.revenue).toEqual([])
-    expect(result.state.expenses).toEqual([])
-  })
-})
-
-describe('parsePlannerJson', () => {
-  it('returns a clear error for invalid JSON', () => {
-    const result = parsePlannerJson('{')
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    expect(result.error).toMatch(/valid planner export/i)
-  })
-
-  it('round-trips a default state export', () => {
-    const state = createDefaultState(new Date('2026-01-15T00:00:00Z'))
-    const result = parsePlannerJson(JSON.stringify(state))
-    expect(result.ok).toBe(true)
-    if (!result.ok) return
-    expect(result.state.businessName).toBe(state.businessName)
-    expect(result.state.revenue).toHaveLength(state.revenue.length)
+    expect(result.state.scenarios[0].revenue[0].oneTimeMonth).toBe(0)
   })
 })

@@ -433,3 +433,129 @@
   white-space: nowrap;
   border: 0;
 }
+
+.currency-note,
+.cash-timing-note {
+  margin: 0.5rem 0 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.scenario-bar {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem 1.25rem;
+}
+
+.scenario-bar__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  align-items: flex-end;
+}
+
+.scenario-select {
+  min-width: 160px;
+}
+
+.scenario-rename {
+  min-width: 180px;
+  flex: 1;
+}
+
+.scenario-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.sticky-summary {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  margin: 0 -0.25rem;
+  padding: 0.35rem 0.25rem;
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+}
+
+.sticky-summary__inner {
+  display: flex;
+  gap: 0.65rem;
+  overflow-x: auto;
+  padding: 0.35rem 0;
+  -webkit-overflow-scrolling: touch;
+}
+
+.sticky-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.4rem 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.sticky-chip__label {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.sticky-chip strong {
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.sticky-chip--muted strong {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+@media (max-width: 600px) {
+  .sticky-summary {
+    position: static;
+    background: transparent;
+    backdrop-filter: none;
+    border-bottom: none;
+    margin: 0;
+    padding: 0;
+  }
+}
+
+.category-field {
+  max-width: 240px;
+  margin-bottom: 0.75rem;
+}
+
+.charts-loading {
+  color: var(--text-muted);
+  padding: 2rem 1rem;
+  text-align: center;
+}
+
+.compare-table .tone-best {
+  color: var(--accent-green);
+  font-weight: 600;
+}
+
+.compare-table .tone-worst {
+  color: var(--accent-red);
+}
+
+.is-active-scenario td:first-child {
+  font-weight: 700;
+}
+
+.btn:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}

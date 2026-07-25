@@ -1,11 +1,19 @@
-import type { LineItem, MonthSummary, PlannerState } from '../types'
+import type {
+  ExpenseLineItem,
+  LineItem,
+  MonthSummary,
+  PlannerState,
+  Scenario,
+  ScenarioComparisonRow,
+} from '../types'
 import { MONTHS } from '../types'
+import { getActiveScenario } from './defaults'
 
 function finiteOrZero(value: number): number {
   return Number.isFinite(value) ? value : 0
 }
 
-function roundCents(value: number): number {
+export function roundCents(value: number): number {
   return Math.round(finiteOrZero(value) * 100) / 100
 }
 
@@ -28,7 +36,12 @@ export function resolveAmounts(item: LineItem): number[] {
     return result
   }
 
-  // manual (and any unexpected fillMode)
+  if (item.fillMode === 'one-time') {
+    const month = Math.trunc(finiteOrZero(item.oneTimeMonth))
+    const safeMonth = month >= 0 && month <= 11 ? month : 0
+    return Array.from({ length: 12 }, (_, i) => (i === safeMonth ? uniformAmount : 0))
+  }
+
   const amounts = Array.isArray(item.amounts) ? item.amounts : []
   return Array.from({ length: 12 }, (_, i) => finiteOrZero(amounts[i] ?? 0))
 }
@@ -48,7 +61,6 @@ export function monthLabel(monthIndex: number, year: number): string {
   return `${MONTHS[monthIndex]} ${year}`
 }
 
-/** Calendar labels for the 12 forecast months (handles year rollover). */
 export function forecastMonthLabels(startMonth: number, startYear: number): string[] {
   const month = Number.isFinite(startMonth) ? Math.trunc(startMonth) : 0
   const year = Number.isFinite(startYear) ? Math.trunc(startYear) : new Date().getFullYear()
@@ -61,45 +73,90 @@ export function forecastMonthLabels(startMonth: number, startYear: number): stri
   })
 }
 
-export function buildSummaries(state: PlannerState): MonthSummary[] {
-  const revenueByMonth = sumLineItems(state.revenue)
-  const expensesByMonth = sumLineItems(state.expenses)
-  let cumulative = finiteOrZero(state.startingCash)
-  const labels = forecastMonthLabels(state.startMonth, state.startYear)
+function marginRatio(part: number, revenue: number): number | null {
+  if (revenue === 0) return null
+  return part / revenue
+}
+
+export function splitExpenses(expenses: ExpenseLineItem[]): {
+  cogs: ExpenseLineItem[]
+  operating: ExpenseLineItem[]
+} {
+  return {
+    cogs: expenses.filter((e) => e.category === 'cogs'),
+    operating: expenses.filter((e) => e.category !== 'cogs'),
+  }
+}
+
+export function buildSummariesForScenario(
+  scenario: Scenario,
+  startMonth: number,
+  startYear: number,
+  startingCash: number,
+): MonthSummary[] {
+  const revenueByMonth = sumLineItems(scenario.revenue)
+  const { cogs, operating } = splitExpenses(scenario.expenses)
+  const cogsByMonth = sumLineItems(cogs)
+  const opexByMonth = sumLineItems(operating)
+  let cumulative = finiteOrZero(startingCash)
+  const labels = forecastMonthLabels(startMonth, startYear)
 
   return Array.from({ length: 12 }, (_, i) => {
     const revenue = roundCents(revenueByMonth[i])
-    const expenses = roundCents(expensesByMonth[i])
-    const net = roundCents(revenue - expenses)
+    const cogsAmt = roundCents(cogsByMonth[i])
+    const operatingExpenses = roundCents(opexByMonth[i])
+    const expenses = roundCents(cogsAmt + operatingExpenses)
+    const grossProfit = roundCents(revenue - cogsAmt)
+    const net = roundCents(grossProfit - operatingExpenses)
     cumulative = roundCents(cumulative + net)
 
     return {
       label: labels[i],
       revenue,
+      cogs: cogsAmt,
+      grossProfit,
+      grossMargin: marginRatio(grossProfit, revenue),
+      operatingExpenses,
       expenses,
       net,
+      netMargin: marginRatio(net, revenue),
       cumulative,
     }
   })
 }
 
+export function buildSummaries(state: PlannerState): MonthSummary[] {
+  const scenario = getActiveScenario(state)
+  return buildSummariesForScenario(
+    scenario,
+    state.startMonth,
+    state.startYear,
+    state.startingCash,
+  )
+}
+
 export interface PlannerMetrics {
   totalRevenue: number
+  totalCogs: number
+  grossProfit: number
+  grossMargin: number | null
+  operatingExpenses: number
   totalExpenses: number
   yearNet: number
+  netMargin: number | null
   endingCash: number
   lowestCash: number
+  lowestCashMonthLabel: string | null
   monthsAtLoss: number
-  /** First month where net > 0; null if none. */
   firstProfitableMonthLabel: string | null
+  firstNegativeCashMonthLabel: string | null
   /** Mean of |net| for months with net < 0; 0 if none. */
   averageMonthlyLoss: number
   /**
-   * Runway:
-   * - "Already negative" if starting cash < 0
-   * - month label of first ending cash < 0
-   * - "12+ months" if cash stays non-negative
+   * Complete forecast months with non-negative ending cash before first negative.
+   * null means never goes negative within the forecast (12+).
    */
+  runwayMonths: number | null
   runwayLabel: string
 }
 
@@ -108,49 +165,118 @@ export function buildMetrics(
   startingCash: number,
 ): PlannerMetrics {
   const totalRevenue = roundCents(summaries.reduce((s, m) => s + m.revenue, 0))
+  const totalCogs = roundCents(summaries.reduce((s, m) => s + m.cogs, 0))
+  const operatingExpenses = roundCents(
+    summaries.reduce((s, m) => s + m.operatingExpenses, 0),
+  )
   const totalExpenses = roundCents(summaries.reduce((s, m) => s + m.expenses, 0))
-  const yearNet = roundCents(totalRevenue - totalExpenses)
+  const grossProfit = roundCents(totalRevenue - totalCogs)
+  const yearNet = roundCents(grossProfit - operatingExpenses)
   const endingCash =
     summaries.length > 0
       ? summaries[summaries.length - 1].cumulative
       : finiteOrZero(startingCash)
 
-  const cashPoints = [finiteOrZero(startingCash), ...summaries.map((m) => m.cumulative)]
-  const lowestCash = Math.min(...cashPoints)
+  let lowestCash = finiteOrZero(startingCash)
+  let lowestCashMonthLabel: string | null = null
+  for (const m of summaries) {
+    if (m.cumulative < lowestCash) {
+      lowestCash = m.cumulative
+      lowestCashMonthLabel = m.label
+    }
+  }
+  // If starting cash is the lowest and never beaten by a month, leave month null
+  // unless a month ties — we prefer the first month that hits the low.
+  if (lowestCashMonthLabel === null && summaries.length > 0) {
+    const tie = summaries.find((m) => m.cumulative === lowestCash)
+    if (tie && tie.cumulative <= finiteOrZero(startingCash)) {
+      lowestCashMonthLabel = tie.label
+    }
+  }
 
   const lossMonths = summaries.filter((m) => m.net < 0)
   const monthsAtLoss = lossMonths.length
   const averageMonthlyLoss =
     monthsAtLoss > 0
-      ? roundCents(
-          Math.abs(lossMonths.reduce((s, m) => s + m.net, 0) / monthsAtLoss),
-        )
+      ? roundCents(Math.abs(lossMonths.reduce((s, m) => s + m.net, 0) / monthsAtLoss))
       : 0
 
   const firstProfit = summaries.find((m) => m.net > 0)
   const firstProfitableMonthLabel = firstProfit ? firstProfit.label : null
 
+  const firstNegCash = summaries.find((m) => m.cumulative < 0)
+  const firstNegativeCashMonthLabel = firstNegCash ? firstNegCash.label : null
+
+  const start = finiteOrZero(startingCash)
+  let runwayMonths: number | null
   let runwayLabel: string
-  if (finiteOrZero(startingCash) < 0) {
-    runwayLabel = 'Already negative'
+
+  if (start < 0) {
+    runwayMonths = 0
+    runwayLabel = '0 months — already negative'
+  } else if (summaries.length > 0 && summaries[0].cumulative < 0) {
+    runwayMonths = 0
+    runwayLabel = '0 full months'
   } else {
-    const firstNegative = summaries.find((m) => m.cumulative < 0)
-    runwayLabel = firstNegative ? firstNegative.label : '12+ months'
+    const negIndex = summaries.findIndex((m) => m.cumulative < 0)
+    if (negIndex === -1) {
+      runwayMonths = null
+      runwayLabel = '12+ months'
+    } else {
+      runwayMonths = negIndex
+      runwayLabel = `${negIndex} full month${negIndex === 1 ? '' : 's'}`
+    }
   }
 
+  // Exactly zero cash: still non-negative — runway continues until < 0
   return {
     totalRevenue,
+    totalCogs,
+    grossProfit,
+    grossMargin: marginRatio(grossProfit, totalRevenue),
+    operatingExpenses,
     totalExpenses,
     yearNet,
+    netMargin: marginRatio(yearNet, totalRevenue),
     endingCash,
     lowestCash,
+    lowestCashMonthLabel,
     monthsAtLoss,
     firstProfitableMonthLabel,
+    firstNegativeCashMonthLabel,
     averageMonthlyLoss,
+    runwayMonths,
     runwayLabel,
   }
 }
 
+export function compareScenarios(state: PlannerState): ScenarioComparisonRow[] {
+  return state.scenarios.map((scenario) => {
+    const summaries = buildSummariesForScenario(
+      scenario,
+      state.startMonth,
+      state.startYear,
+      state.startingCash,
+    )
+    const metrics = buildMetrics(summaries, state.startingCash)
+    return {
+      scenarioId: scenario.id,
+      scenarioName: scenario.name,
+      totalRevenue: metrics.totalRevenue,
+      grossProfit: metrics.grossProfit,
+      grossMargin: metrics.grossMargin,
+      totalExpenses: metrics.totalExpenses,
+      yearNet: metrics.yearNet,
+      netMargin: metrics.netMargin,
+      endingCash: metrics.endingCash,
+      lowestCash: metrics.lowestCash,
+      runwayLabel: metrics.runwayLabel,
+      runwayMonths: metrics.runwayMonths,
+    }
+  })
+}
+
+/** @deprecated Prefer formatMoney from formatMoney.ts */
 export function formatCurrency(value: number): string {
   return new Intl.NumberFormat(undefined, {
     style: 'currency',
@@ -159,6 +285,7 @@ export function formatCurrency(value: number): string {
   }).format(finiteOrZero(value))
 }
 
+/** @deprecated Prefer formatMoneyDetailed from formatMoney.ts */
 export function formatCurrencyDetailed(value: number): string {
   return new Intl.NumberFormat(undefined, {
     style: 'currency',
