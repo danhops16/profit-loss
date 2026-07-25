@@ -4,7 +4,6 @@ import type {
   CurrencyCode,
   ExpenseCategory,
   ExpenseLineItem,
-  FillMode,
   FundingLineItem,
   FundingType,
   LineItem,
@@ -18,7 +17,6 @@ import {
 } from '../types'
 import {
   buildRevenueContext,
-  modeSummary,
   resolveAmounts,
   roundCents,
 } from '../utils/calculations'
@@ -32,8 +30,6 @@ interface LineWorkspaceProps {
   revenue: LineItem[]
   expenses: ExpenseLineItem[]
   funding: FundingLineItem[]
-  openItemId: string | null
-  onOpenItemId: (id: string | null) => void
   onAdd: (
     kind: EditorTab,
     name?: string,
@@ -57,32 +53,28 @@ const COST_PRESETS: Array<{ name: string; cashPurpose: CashPurpose; category: Ex
     { name: 'Insurance', cashPurpose: 'operating', category: 'other' },
   ]
 
+const COST_GROUPS: CashPurpose[] = [
+  'direct',
+  'operating',
+  'startup',
+  'loan_payment',
+  'other_outflow',
+]
+
 export function LineWorkspace({
   currency,
   monthLabels,
   revenue,
   expenses,
   funding,
-  openItemId,
-  onOpenItemId,
   onAdd,
   onUpdate,
   onDuplicate,
   onRemove,
 }: LineWorkspaceProps) {
-  const [tab, setTab] = useState<EditorTab>('revenue')
-  const money = (n: number) => formatMoney(n, currency)
+  const [tab, setTab] = useState<EditorTab>('costs')
   const context = buildRevenueContext(revenue)
-
-  const items: Array<{
-    kind: EditorTab
-    item: LineItem | ExpenseLineItem | FundingLineItem
-  }> =
-    tab === 'revenue'
-      ? revenue.map((item) => ({ kind: 'revenue' as const, item }))
-      : tab === 'costs'
-        ? expenses.map((item) => ({ kind: 'costs' as const, item }))
-        : funding.map((item) => ({ kind: 'funding' as const, item }))
+  const money = (n: number) => formatMoney(n, currency)
 
   return (
     <section className="line-workspace" aria-label="Forecast line items">
@@ -115,7 +107,7 @@ export function LineWorkspace({
                 key={name}
                 type="button"
                 className="btn btn--ghost btn--sm"
-                onClick={() => onOpenItemId(onAdd('revenue', name))}
+                onClick={() => onAdd('revenue', name)}
               >
                 + {name}
               </button>
@@ -127,12 +119,10 @@ export function LineWorkspace({
                 type="button"
                 className="btn btn--ghost btn--sm"
                 onClick={() =>
-                  onOpenItemId(
-                    onAdd('costs', p.name, {
-                      cashPurpose: p.cashPurpose,
-                      category: p.category,
-                    }),
-                  )
+                  onAdd('costs', p.name, {
+                    cashPurpose: p.cashPurpose,
+                    category: p.category,
+                  })
                 }
               >
                 + {p.name}
@@ -142,7 +132,7 @@ export function LineWorkspace({
             <button
               type="button"
               className="btn btn--ghost btn--sm"
-              onClick={() => onOpenItemId(onAdd('funding', 'Owner top-up', { fundingType: 'owner' }))}
+              onClick={() => onAdd('funding', 'Owner top-up', { fundingType: 'owner' })}
             >
               + Owner top-up
             </button>
@@ -150,18 +140,11 @@ export function LineWorkspace({
           <button
             type="button"
             className="btn btn--primary btn--sm"
-            onClick={() => onOpenItemId(onAdd(tab === 'costs' ? 'costs' : tab))}
+            onClick={() => onAdd(tab)}
           >
             Add line
           </button>
         </div>
-        <button
-          type="button"
-          className="btn btn--ghost btn--sm"
-          onClick={() => onOpenItemId(null)}
-        >
-          Collapse all
-        </button>
       </div>
 
       {tab === 'funding' && (
@@ -171,108 +154,183 @@ export function LineWorkspace({
         </p>
       )}
 
-      {items.length === 0 ? (
-        <p className="empty-hint">No lines yet. Add one to get started.</p>
-      ) : (
-        <div className="line-rows">
-          {items.map(({ kind, item }) => {
-            const amounts = resolveAmounts(item, context)
-            const total = roundCents(amounts.reduce((a, b) => a + b, 0))
-            const open = openItemId === item.id
-            const expense = kind === 'costs' ? (item as ExpenseLineItem) : null
-            const fund = kind === 'funding' ? (item as FundingLineItem) : null
-            const purposeLabel = expense
-              ? CASH_PURPOSE_LABELS[expense.cashPurpose]
-              : fund
-                ? OPENING_FUND_TYPE_LABELS[fund.fundingType]
-                : 'Revenue'
+      {tab === 'revenue' && (
+        <LineCardList
+          kind="revenue"
+          items={revenue}
+          currency={currency}
+          monthLabels={monthLabels}
+          revenue={revenue}
+          context={context}
+          money={money}
+          canRemove={revenue.length > 1}
+          onUpdate={onUpdate}
+          onDuplicate={onDuplicate}
+          onRemove={onRemove}
+        />
+      )}
 
+      {tab === 'funding' && (
+        <LineCardList
+          kind="funding"
+          items={funding}
+          currency={currency}
+          monthLabels={monthLabels}
+          revenue={revenue}
+          context={context}
+          money={money}
+          canRemove={funding.length > 0}
+          onUpdate={onUpdate}
+          onDuplicate={onDuplicate}
+          onRemove={onRemove}
+        />
+      )}
+
+      {tab === 'costs' && (
+        <div className="cost-groups">
+          {COST_GROUPS.map((purpose) => {
+            const group = expenses.filter((e) => e.cashPurpose === purpose)
+            if (group.length === 0) return null
             return (
-              <article key={item.id} className={`line-row${open ? ' is-open' : ''}`}>
-                <div className="line-row__summary">
-                  <div className="line-row__meta">
-                    <strong>{item.name || 'Untitled'}</strong>
-                    <span className="meta-pill">{purposeLabel}</span>
-                    <span className="meta-muted">{item.fillMode}</span>
-                    <span className="meta-muted">
-                      {modeSummary(item, monthLabels, money)}
-                    </span>
-                  </div>
-                  <div className="line-row__actions">
-                    <span className="line-total">{money(total)} · 12-mo total</span>
-                    <button
-                      type="button"
-                      className="btn btn--ghost btn--sm"
-                      onClick={() => onOpenItemId(open ? null : item.id)}
-                      aria-expanded={open}
-                    >
-                      {open ? 'Done' : 'Edit'}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn--ghost btn--sm"
-                      onClick={() => onOpenItemId(onDuplicate(kind, item.id))}
-                    >
-                      Duplicate
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn--ghost btn--sm btn--danger"
-                      onClick={() => onRemove(kind, item.id)}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                </div>
-
-                {open && (
-                  <LineEditor
-                    kind={kind}
-                    item={item}
-                    currency={currency}
-                    monthLabels={monthLabels}
-                    revenue={revenue}
-                    onUpdate={(patch) => onUpdate(kind, item.id, patch)}
-                  />
-                )}
-              </article>
+              <div key={purpose} className="cost-group">
+                <h3 className="cost-group__title">{CASH_PURPOSE_LABELS[purpose]}</h3>
+                <LineCardList
+                  kind="costs"
+                  items={group}
+                  currency={currency}
+                  monthLabels={monthLabels}
+                  revenue={revenue}
+                  context={context}
+                  money={money}
+                  canRemove={expenses.length > 1}
+                  onUpdate={onUpdate}
+                  onDuplicate={onDuplicate}
+                  onRemove={onRemove}
+                />
+              </div>
             )
           })}
+          {expenses.length === 0 && (
+            <p className="empty-hint">No costs yet. Add a line to get started.</p>
+          )}
         </div>
       )}
     </section>
   )
 }
 
-function LineEditor({
+function LineCardList({
+  kind,
+  items,
+  currency,
+  monthLabels,
+  revenue,
+  context,
+  money,
+  canRemove,
+  onUpdate,
+  onDuplicate,
+  onRemove,
+}: {
+  kind: EditorTab
+  items: Array<LineItem | ExpenseLineItem | FundingLineItem>
+  currency: CurrencyCode
+  monthLabels: string[]
+  revenue: LineItem[]
+  context: ReturnType<typeof buildRevenueContext>
+  money: (n: number) => string
+  canRemove: boolean
+  onUpdate: LineWorkspaceProps['onUpdate']
+  onDuplicate: LineWorkspaceProps['onDuplicate']
+  onRemove: LineWorkspaceProps['onRemove']
+}) {
+  if (items.length === 0 && kind !== 'costs') {
+    return <p className="empty-hint">No lines yet. Add a line to get started.</p>
+  }
+
+  return (
+    <div className="line-cards">
+      {items.map((item) => {
+        const total = roundCents(
+          resolveAmounts(item, context).reduce((a, b) => a + b, 0),
+        )
+        return (
+          <LineCard
+            key={item.id}
+            kind={kind}
+            item={item}
+            currency={currency}
+            monthLabels={monthLabels}
+            revenue={revenue}
+            totalLabel={`${money(total)} · 12-mo total`}
+            canRemove={canRemove}
+            onUpdate={(patch) => onUpdate(kind, item.id, patch)}
+            onDuplicate={() => onDuplicate(kind, item.id)}
+            onRemove={() => onRemove(kind, item.id)}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
+function LineCard({
   kind,
   item,
   currency,
   monthLabels,
   revenue,
+  totalLabel,
+  canRemove,
   onUpdate,
+  onDuplicate,
+  onRemove,
 }: {
   kind: EditorTab
   item: LineItem | ExpenseLineItem | FundingLineItem
   currency: CurrencyCode
   monthLabels: string[]
   revenue: LineItem[]
+  totalLabel: string
+  canRemove: boolean
   onUpdate: (patch: Partial<LineItem | ExpenseLineItem | FundingLineItem>) => void
+  onDuplicate: () => void
+  onRemove: () => void
 }) {
   const expense = kind === 'costs' ? (item as ExpenseLineItem) : null
   const fund = kind === 'funding' ? (item as FundingLineItem) : null
   const modeGroup = `mode-${item.id}`
+  const nameId = `name-${item.id}`
 
   return (
-    <div className="line-editor">
-      <label className="field">
-        <span>Name</span>
+    <article className="line-card" aria-label={`${kind} line: ${item.name || 'Untitled'}`}>
+      <div className="line-card__head">
+        <label className="visually-hidden" htmlFor={nameId}>
+          Line item name
+        </label>
         <input
+          id={nameId}
           type="text"
+          className="line-name"
           value={item.name}
           onChange={(e) => onUpdate({ name: e.target.value })}
+          placeholder="Line item name"
         />
-      </label>
+        <span className="line-yearly">{totalLabel}</span>
+        <button type="button" className="btn btn--ghost btn--sm" onClick={onDuplicate}>
+          Duplicate
+        </button>
+        {canRemove && (
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm btn--danger"
+            onClick={onRemove}
+            aria-label={`Remove ${item.name || 'line item'}`}
+          >
+            Remove
+          </button>
+        )}
+      </div>
 
       {expense && (
         <div className="inline-row">
@@ -280,9 +338,7 @@ function LineEditor({
             <span>Cash purpose</span>
             <select
               value={expense.cashPurpose}
-              onChange={(e) =>
-                onUpdate({ cashPurpose: e.target.value as CashPurpose })
-              }
+              onChange={(e) => onUpdate({ cashPurpose: e.target.value as CashPurpose })}
             >
               {CASH_PURPOSES.map((p) => (
                 <option key={p} value={p}>
@@ -295,9 +351,7 @@ function LineEditor({
             <span>Detail category</span>
             <select
               value={expense.category}
-              onChange={(e) =>
-                onUpdate({ category: e.target.value as ExpenseCategory })
-              }
+              onChange={(e) => onUpdate({ category: e.target.value as ExpenseCategory })}
             >
               {EXPENSE_CATEGORIES.map((c) => (
                 <option key={c} value={c}>
@@ -314,9 +368,7 @@ function LineEditor({
           <span>Funding type</span>
           <select
             value={fund.fundingType}
-            onChange={(e) =>
-              onUpdate({ fundingType: e.target.value as FundingType })
-            }
+            onChange={(e) => onUpdate({ fundingType: e.target.value as FundingType })}
           >
             {(Object.keys(OPENING_FUND_TYPE_LABELS) as FundingType[]).map((t) => (
               <option key={t} value={t}>
@@ -329,27 +381,53 @@ function LineEditor({
 
       <fieldset className="fill-mode">
         <legend className="visually-hidden">Calculation mode</legend>
-        {(
-          [
-            ['uniform', 'Same each month'],
-            ['growth', 'Growth %'],
-            ['one-time', 'One-time'],
-            ...(kind === 'costs'
-              ? ([['percent-revenue', '% of revenue']] as const)
-              : []),
-            ['manual', 'Custom per month'],
-          ] as const
-        ).map(([mode, label]) => (
-          <label key={mode}>
+        <label>
+          <input
+            type="radio"
+            name={modeGroup}
+            checked={item.fillMode === 'uniform'}
+            onChange={() => onUpdate({ fillMode: 'uniform' })}
+          />
+          Same each month
+        </label>
+        <label>
+          <input
+            type="radio"
+            name={modeGroup}
+            checked={item.fillMode === 'growth'}
+            onChange={() => onUpdate({ fillMode: 'growth' })}
+          />
+          Growth %
+        </label>
+        <label>
+          <input
+            type="radio"
+            name={modeGroup}
+            checked={item.fillMode === 'one-time'}
+            onChange={() => onUpdate({ fillMode: 'one-time' })}
+          />
+          One-time
+        </label>
+        {kind === 'costs' && (
+          <label>
             <input
               type="radio"
               name={modeGroup}
-              checked={item.fillMode === mode}
-              onChange={() => onUpdate({ fillMode: mode as FillMode })}
+              checked={item.fillMode === 'percent-revenue'}
+              onChange={() => onUpdate({ fillMode: 'percent-revenue' })}
             />
-            {label}
+            % of revenue
           </label>
-        ))}
+        )}
+        <label>
+          <input
+            type="radio"
+            name={modeGroup}
+            checked={item.fillMode === 'manual'}
+            onChange={() => onUpdate({ fillMode: 'manual' })}
+          />
+          Custom per month
+        </label>
       </fieldset>
 
       {item.fillMode === 'uniform' && (
@@ -422,9 +500,7 @@ function LineEditor({
               type="number"
               step={0.1}
               value={item.percentOfRevenue || ''}
-              onChange={(e) =>
-                onUpdate({ percentOfRevenue: Number(e.target.value) || 0 })
-              }
+              onChange={(e) => onUpdate({ percentOfRevenue: Number(e.target.value) || 0 })}
             />
           </label>
           <label className="inline-field">
@@ -469,6 +545,6 @@ function LineEditor({
           ))}
         </div>
       )}
-    </div>
+    </article>
   )
 }
