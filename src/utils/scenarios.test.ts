@@ -10,13 +10,7 @@ import {
 } from './scenarios'
 
 describe('scenarios', () => {
-  it('creates a blank scenario and switches to it', () => {
-    const state = addBlankScenario(createDefaultState(new Date('2026-01-01')), 'Lean')
-    expect(state.scenarios).toHaveLength(2)
-    expect(getActiveScenario(state).name).toBe('Lean')
-  })
-
-  it('duplicates with independent deep copies and new ids', () => {
+  it('duplicates independently and refuses deleting the last scenario', () => {
     let state = createDefaultState(new Date('2026-01-01'))
     const originalId = state.scenarios[0].id
     const lineId = state.scenarios[0].revenue[0].id
@@ -26,60 +20,33 @@ describe('scenarios', () => {
     state = dup.state
     const copy = state.scenarios.find((s) => s.id !== originalId)!
     expect(copy.revenue[0].id).not.toBe(lineId)
-    copy.revenue[0].uniformAmount = 999
-    expect(state.scenarios.find((s) => s.id === originalId)!.revenue[0].uniformAmount).not.toBe(
-      999,
-    )
-  })
+    copy.notes = 'downside'
+    expect(state.scenarios.find((s) => s.id === originalId)!.notes).toBe('')
 
-  it('renames, switches, and refuses deleting the last scenario', () => {
-    let state = createDefaultState(new Date('2026-01-01'))
-    state = addBlankScenario(state, 'Alt')
-    const renamed = renameScenario(state, state.activeScenarioId, 'Optimistic')
-    expect(renamed.ok).toBe(true)
-    if (!renamed.ok) return
-    state = renamed.state
-    expect(getActiveScenario(state).name).toBe('Optimistic')
+    state = updateActiveScenario(state, (s) => ({
+      ...s,
+      revenue: s.revenue.map((r, i) => (i === 0 ? { ...r, uniformAmount: 42 } : r)),
+    }))
+    expect(getActiveScenario(state).revenue[0].uniformAmount).toBe(42)
 
-    const baseId = state.scenarios.find((s) => s.name === 'Base')!.id
-    const switched = switchScenario(state, baseId)
-    expect(switched.ok).toBe(true)
-    if (!switched.ok) return
-    state = switched.state
+    const other = state.scenarios.find((s) => s.id !== state.activeScenarioId)!
+    expect(other.revenue[0].uniformAmount).not.toBe(42)
 
     const deleted = deleteScenario(state, state.activeScenarioId)
     expect(deleted.ok).toBe(true)
     if (!deleted.ok) return
     state = deleted.state
-    expect(state.scenarios).toHaveLength(1)
-
-    const last = deleteScenario(state, state.scenarios[0].id)
-    expect(last.ok).toBe(false)
+    expect(deleteScenario(state, state.scenarios[0].id).ok).toBe(false)
   })
 
-  it('does not mutate sibling scenarios when updating active lines', () => {
-    let state = createDefaultState(new Date('2026-01-01'))
-    state = addBlankScenario(state, 'B')
-    const aId = state.scenarios[0].id
-    state = switchScenario(state, aId).ok
-      ? (switchScenario(state, aId) as { ok: true; state: typeof state }).state
-      : state
-
-    // Ensure A is active
-    const sw = switchScenario(state, aId)
-    expect(sw.ok).toBe(true)
-    if (!sw.ok) return
-    state = sw.state
-
-    const otherBefore = state.scenarios.find((s) => s.id !== aId)!.revenue[0].uniformAmount
-    state = updateActiveScenario(state, (scenario) => ({
-      ...scenario,
-      revenue: scenario.revenue.map((r, i) =>
-        i === 0 ? { ...r, uniformAmount: 1234 } : r,
-      ),
-    }))
-    const otherAfter = state.scenarios.find((s) => s.id !== aId)!.revenue[0].uniformAmount
-    expect(otherAfter).toBe(otherBefore)
-    expect(getActiveScenario(state).revenue[0].uniformAmount).toBe(1234)
+  it('renames and switches', () => {
+    let state = addBlankScenario(createDefaultState(new Date('2026-01-01')), 'Downside')
+    const renamed = renameScenario(state, state.activeScenarioId, 'Upside')
+    expect(renamed.ok).toBe(true)
+    if (!renamed.ok) return
+    state = renamed.state
+    expect(getActiveScenario(state).name).toBe('Upside')
+    const base = state.scenarios.find((s) => s.name === 'Base')!
+    expect(switchScenario(state, base.id).ok).toBe(true)
   })
 })

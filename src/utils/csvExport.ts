@@ -1,25 +1,21 @@
-import type { CurrencyCode, PlannerState, Scenario } from '../types'
+import type { PlannerState, Scenario } from '../types'
 import {
   buildSummariesForScenario,
   resolveAmounts,
   roundCents,
-  splitExpenses,
+  buildRevenueContext,
 } from './calculations'
-import { formatMargin } from './formatMoney'
 
 function escapeCsvCell(value: string | number): string {
   const raw = String(value)
-  if (/[",\n\r]/.test(raw)) {
-    return `"${raw.replace(/"/g, '""')}"`
-  }
+  if (/[",\n\r]/.test(raw)) return `"${raw.replace(/"/g, '""')}"`
   return raw
 }
 
 function uniqueColumnName(base: string, used: Map<string, number>): string {
   const count = used.get(base) ?? 0
   used.set(base, count + 1)
-  if (count === 0) return base
-  return `${base} (${count + 1})`
+  return count === 0 ? base : `${base} (${count + 1})`
 }
 
 export function buildActiveScenarioCsv(state: PlannerState, scenario: Scenario): string {
@@ -27,59 +23,63 @@ export function buildActiveScenarioCsv(state: PlannerState, scenario: Scenario):
     scenario,
     state.startMonth,
     state.startYear,
-    state.startingCash,
+    state.openingFunds,
+    state.cashBuffer,
   )
-  const { cogs, operating } = splitExpenses(scenario.expenses)
-
+  const context = buildRevenueContext(scenario.revenue)
   const usedNames = new Map<string, number>()
+
   const revenueCols = scenario.revenue.map((r) =>
     uniqueColumnName(`Revenue: ${r.name || 'Untitled'}`, usedNames),
   )
-  const cogsCols = cogs.map((e) =>
-    uniqueColumnName(`COGS: ${e.name || 'Untitled'}`, usedNames),
+  const expenseCols = scenario.expenses.map((e) =>
+    uniqueColumnName(`Cost: ${e.name || 'Untitled'}`, usedNames),
   )
-  const opexCols = operating.map((e) =>
-    uniqueColumnName(`Expense: ${e.name || 'Untitled'}`, usedNames),
+  const fundingCols = scenario.funding.map((f) =>
+    uniqueColumnName(`Funding: ${f.name || 'Untitled'}`, usedNames),
   )
 
   const headers = [
     'Month',
     ...revenueCols,
     'Total revenue',
-    ...cogsCols,
-    'Total COGS',
-    'Gross profit',
-    'Gross margin',
-    ...opexCols,
-    'Operating expenses',
-    'Total expenses',
-    'Net profit',
-    'Net margin',
+    ...expenseCols,
+    'Direct costs',
+    'Ongoing costs',
+    'Operating profit',
+    'Startup spending',
+    'Loan payments',
+    'Other outflows',
+    ...fundingCols,
+    'Additional funding',
+    'Net cash change',
     'Ending cash',
+    'Buffer gap',
   ]
 
-  const revenueSeries = scenario.revenue.map((r) => resolveAmounts(r))
-  const cogsSeries = cogs.map((e) => resolveAmounts(e))
-  const opexSeries = operating.map((e) => resolveAmounts(e))
+  const revenueSeries = scenario.revenue.map((r) => resolveAmounts(r, context))
+  const expenseSeries = scenario.expenses.map((e) => resolveAmounts(e, context))
+  const fundingSeries = scenario.funding.map((f) => resolveAmounts(f, context))
 
   const rows = summaries.map((summary, i) => {
     const cells: Array<string | number> = [summary.label]
     for (const series of revenueSeries) cells.push(roundCents(series[i]))
     cells.push(summary.revenue)
-    for (const series of cogsSeries) cells.push(roundCents(series[i]))
-    cells.push(summary.cogs)
-    cells.push(summary.grossProfit)
-    cells.push(formatMargin(summary.grossMargin))
-    for (const series of opexSeries) cells.push(roundCents(series[i]))
-    cells.push(summary.operatingExpenses)
-    cells.push(summary.expenses)
-    cells.push(summary.net)
-    cells.push(formatMargin(summary.netMargin))
-    cells.push(summary.cumulative)
+    for (const series of expenseSeries) cells.push(roundCents(series[i]))
+    cells.push(summary.directCosts)
+    cells.push(summary.operatingCosts)
+    cells.push(summary.operatingProfit)
+    cells.push(summary.startupSpending)
+    cells.push(summary.loanPayments)
+    cells.push(summary.otherOutflows)
+    for (const series of fundingSeries) cells.push(roundCents(series[i]))
+    cells.push(summary.additionalFunding)
+    cells.push(summary.netCashChange)
+    cells.push(summary.endingCash)
+    cells.push(summary.bufferGap)
     return cells.map(escapeCsvCell).join(',')
   })
 
-  // UTF-8 BOM helps Excel recognize encoding
   return `\uFEFF${headers.map(escapeCsvCell).join(',')}\n${rows.join('\n')}\n`
 }
 
@@ -99,5 +99,3 @@ export function downloadTextFile(filename: string, contents: string, mime: strin
   a.click()
   URL.revokeObjectURL(url)
 }
-
-export type { CurrencyCode }
