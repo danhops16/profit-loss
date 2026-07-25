@@ -1,5 +1,5 @@
 import type { MonthSummary } from '../types'
-import { formatCurrency } from '../utils/calculations'
+import { buildMetrics, formatCurrency } from '../utils/calculations'
 
 interface DashboardProps {
   businessName: string
@@ -8,53 +8,59 @@ interface DashboardProps {
 }
 
 export function Dashboard({ businessName, summaries, startingCash }: DashboardProps) {
-  const totalRevenue = summaries.reduce((s, m) => s + m.revenue, 0)
-  const totalExpenses = summaries.reduce((s, m) => s + m.expenses, 0)
-  const yearNet = totalRevenue - totalExpenses
-  const endingCash = summaries[summaries.length - 1]?.cumulative ?? startingCash
-
-  const breakEvenMonth = summaries.find((m) => m.net >= 0)
-  const worstCash = Math.min(startingCash, ...summaries.map((m) => m.cumulative))
-  const burnMonths = summaries.filter((m) => m.net < 0).length
+  const metrics = buildMetrics(summaries, startingCash)
 
   return (
-    <section className="dashboard">
+    <section className="dashboard" aria-label="Year one snapshot">
       <h2>{businessName || 'Your startup'} — year one snapshot</h2>
       <div className="stat-grid">
-        <StatCard label="Total revenue" value={formatCurrency(totalRevenue)} variant="positive" />
-        <StatCard label="Total expenses" value={formatCurrency(totalExpenses)} variant="negative" />
+        <StatCard label="Total revenue" value={formatCurrency(metrics.totalRevenue)} variant="positive" />
+        <StatCard label="Total expenses" value={formatCurrency(metrics.totalExpenses)} variant="negative" />
         <StatCard
           label="Net profit / loss"
-          value={formatCurrency(yearNet)}
-          variant={yearNet >= 0 ? 'positive' : 'negative'}
+          value={formatCurrency(metrics.yearNet)}
+          variant={metrics.yearNet >= 0 ? 'positive' : 'negative'}
         />
-        <StatCard label="Cash at year end" value={formatCurrency(endingCash)} variant="neutral" />
+        <StatCard
+          label="Cash at year end"
+          value={formatCurrency(metrics.endingCash)}
+          variant="neutral"
+        />
         <StatCard
           label="Lowest cash balance"
-          value={formatCurrency(worstCash)}
-          variant={worstCash < 0 ? 'negative' : 'neutral'}
+          value={formatCurrency(metrics.lowestCash)}
+          variant={metrics.lowestCash < 0 ? 'negative' : 'neutral'}
         />
         <StatCard
           label="Months operating at a loss"
-          value={String(burnMonths)}
-          variant={burnMonths > 6 ? 'negative' : 'neutral'}
+          value={String(metrics.monthsAtLoss)}
+          variant={metrics.monthsAtLoss > 6 ? 'negative' : 'neutral'}
         />
         <StatCard
           label="First profitable month"
-          value={breakEvenMonth ? breakEvenMonth.label : 'Not in year 1'}
-          variant={breakEvenMonth ? 'positive' : 'negative'}
+          value={metrics.firstProfitableMonthLabel ?? 'Not in year 1'}
+          variant={metrics.firstProfitableMonthLabel ? 'positive' : 'negative'}
           small
+          hint="First month where net profit is greater than zero"
         />
         <StatCard
-          label="Avg monthly burn"
-          value={formatCurrency(
-            burnMonths > 0
-              ? Math.abs(
-                  summaries.filter((m) => m.net < 0).reduce((s, m) => s + m.net, 0) / burnMonths,
-                )
-              : 0,
-          )}
+          label="Average monthly loss"
+          value={formatCurrency(metrics.averageMonthlyLoss)}
           variant="neutral"
+          hint="Average absolute net in months that lost money"
+        />
+        <StatCard
+          label="Cash runway"
+          value={metrics.runwayLabel}
+          variant={
+            metrics.runwayLabel === '12+ months'
+              ? 'positive'
+              : metrics.runwayLabel === 'Already negative'
+                ? 'negative'
+                : 'neutral'
+          }
+          small
+          hint="First month ending cash is negative, or 12+ months if it stays non-negative"
         />
       </div>
     </section>
@@ -66,14 +72,16 @@ function StatCard({
   value,
   variant,
   small,
+  hint,
 }: {
   label: string
   value: string
   variant: 'positive' | 'negative' | 'neutral'
   small?: boolean
+  hint?: string
 }) {
   return (
-    <article className={`stat-card stat-card--${variant}`}>
+    <article className={`stat-card stat-card--${variant}`} title={hint}>
       <span className="stat-label">{label}</span>
       <span className={`stat-value${small ? ' stat-value--sm' : ''}`}>{value}</span>
     </article>

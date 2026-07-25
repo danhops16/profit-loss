@@ -5,7 +5,7 @@ import { Header } from './components/Header'
 import { LineItemSection } from './components/LineItemSection'
 import { MonthlyTable } from './components/MonthlyTable'
 import { usePlanner } from './hooks/usePlanner'
-import { buildSummaries } from './utils/calculations'
+import { buildSummaries, forecastMonthLabels } from './utils/calculations'
 import './App.css'
 
 const EXPENSE_PRESETS = [
@@ -22,6 +22,7 @@ function App() {
   const { state, update, updateLineItem, addLineItem, removeLineItem, reset, importState } =
     usePlanner()
   const summaries = buildSummaries(state)
+  const monthLabels = forecastMonthLabels(state.startMonth, state.startYear)
 
   return (
     <div className="app">
@@ -39,6 +40,7 @@ function App() {
           kind="revenue"
           items={state.revenue}
           accent="green"
+          monthLabels={monthLabels}
           presets={REVENUE_PRESETS}
           onAdd={(name) => addLineItem('revenue', name)}
           onRemove={(id) => removeLineItem('revenue', id)}
@@ -49,6 +51,7 @@ function App() {
           kind="expenses"
           items={state.expenses}
           accent="red"
+          monthLabels={monthLabels}
           presets={EXPENSE_PRESETS}
           onAdd={(name) => addLineItem('expenses', name)}
           onRemove={(id) => removeLineItem('expenses', id)}

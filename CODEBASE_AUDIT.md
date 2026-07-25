@@ -1,108 +1,116 @@
 # Year-one P&L — codebase audit
 
-Full walkthrough of what exists today so we can pick what to improve.
-
+**Audited:** July 2026 (post correctness-and-trust release)  
 **Live site:** https://danhops16.github.io/profit-loss/  
-**Repo:** https://github.com/danhops16/profit-loss
+**Repo:** https://github.com/danhops16/profit-loss  
+**Branch context:** `cursor/add-codebase-audit` (and local correctness work)
+
+Full walkthrough of what exists **now**, so we can pick the next improvements deliberately.
 
 ---
 
 ## Overview
 
-A single-page Vite + React + TypeScript planner for a startup’s first 12 months. You enter revenue and expense lines, it computes monthly net and cash, and shows a dashboard + charts + table. State lives in `localStorage`. Deployed via GitHub Actions to GitHub Pages.
+A single-page Vite + React + TypeScript planner for a startup’s first 12 months. You enter revenue and expense lines; the app derives monthly net and cash, then shows a dashboard, charts, and a monthly table. State lives in `localStorage` (validated on load). Deployed via GitHub Actions to GitHub Pages.
 
 | Metric | Value |
 |--------|--------|
-| App source files | ~12 |
+| App source modules (`src/`) | ~15 TS/TSX files |
 | Runtime npm deps | 3 (react, react-dom, recharts) |
-| Tests | 0 |
-| Deploy workflows | 1 |
+| Automated tests | **32** (Vitest) |
+| Deploy workflows | 1 (GitHub Pages) |
 
 ### Stack
 
 | Layer | Choice | Notes |
 |-------|--------|--------|
-| Build | Vite 8 | `base` path via `VITE_BASE_PATH` for Pages |
+| Build | Vite 8 | `base` via `VITE_BASE_PATH` for Pages |
 | UI | React 19 | No router — one page |
-| Language | TypeScript | Strict project references (`tsc -b`) |
-| Charts | Recharts 3 | ~586 KB JS bundle (largest cost) |
-| Storage | localStorage | Key: `profit-loss-planner-v1` |
+| Language | TypeScript | `tsc -b` on build |
+| Charts | Recharts 3 | Largest JS chunk (~590 KB) |
+| Tests | Vitest 4 | `npm test` / `npm run test:watch` |
+| Storage | localStorage | Key: `profit-loss-planner-v1` (unchanged) |
 | Host | GitHub Pages | `.github/workflows/deploy.yml` |
 
-### What works well today
+### What’s solid today
 
-- Clear separation: types → calculations → hook → presentational components
-- Three fill modes (uniform / growth / manual) cover most planning styles without a spreadsheet UI
-- Export/import JSON + auto-save make the tool usable without a backend
-- Deploy path is correct for project Pages (`/danhops16.github.io/profit-loss/`)
+- Clear domain split: **types → defaults → validation → calculations → hook → views**
+- Three fill modes (uniform / growth / manual)
+- Untrusted localStorage/import JSON is validated and normalized
+- Reset creates a **fresh** default tree (no shared mutable `defaultState`)
+- Shared `buildMetrics` for dashboard KPIs (including cash runway)
+- Manual month fields use real calendar labels (year-rollover aware)
+- Import errors are inline (`role="status"`), not `alert()`
+- Vitest covers amounts, summaries, metrics edge cases, and validation
 
 ---
 
 ## Architecture
 
-### Data flow (one direction)
+### Data flow
 
 ```
-User edits → usePlanner state → buildSummaries → Dashboard / Charts / Table
+User edits
+  → usePlanner (immutable updates + localStorage write)
+  → buildSummaries(state)
+  → Dashboard (buildMetrics) / Charts / MonthlyTable
+
+Import path:
+  file → parsePlannerJson → importState → setState (or keep plan + error)
 ```
 
-`App.tsx` owns composition only. It never computes P&L itself — that lives in `utils/calculations.ts`. Mutations go through `usePlanner` helpers.
-
-1. Header / LineItemSection call `onUpdate` / `updateLineItem`
-2. `usePlanner` `setState` + persist to localStorage
-3. App re-renders; `buildSummaries(state)` runs every render
-4. Dashboard, Charts, MonthlyTable receive `MonthSummary[]`
-5. ExportBar reads raw `PlannerState` for JSON dump
+`App.tsx` composes only. Money math lives in `utils/calculations.ts`. Persistence safety lives in `utils/validatePlannerState.ts`.
 
 ### Module map
 
-**Domain (core)**
+**Domain**
 
 | File | Role |
 |------|------|
-| `src/types.ts` | `LineItem`, `PlannerState`, `MonthSummary` |
-| `src/utils/calculations.ts` | `resolveAmounts`, `buildSummaries`, currency formatters |
-| `src/hooks/usePlanner.ts` | CRUD + load/save |
+| `src/types.ts` | `FillMode`, `LineItem`, `PlannerState`, `MonthSummary` |
+| `src/utils/defaults.ts` | `createEmptyLineItem`, `createDefaultState` |
+| `src/utils/validatePlannerState.ts` | Parse/normalize untrusted JSON |
+| `src/utils/calculations.ts` | Amounts, summaries, labels, metrics, `$` formatters |
+| `src/hooks/usePlanner.ts` | CRUD, load/save, reset, import |
 
-**Presentation (view)**
+**Presentation**
 
 | Component | Role |
 |-----------|------|
-| `Header` | Setup fields |
-| `LineItemSection` | Edit lines |
-| `Dashboard` | KPI cards |
-| `Charts` | Recharts visuals |
-| `MonthlyTable` | 12-month grid |
-| `ExportBar` | Import / export / reset |
+| `Header` | Business name, start month/year, starting cash |
+| `LineItemSection` | Revenue/expense editors + fill modes |
+| `Dashboard` | KPI cards via `buildMetrics` |
+| `Charts` | Bar / area / line (Recharts) |
+| `MonthlyTable` | 12-month P&L grid |
+| `ExportBar` | Export / import / reset + status messages |
 
-### Architectural gaps
+**Tests**
 
-- No validation layer on import or localStorage load — malformed JSON that still parses can put `NaN` / missing fields into the UI
-- No tests guard the math (growth compounding, year rollover, cash runway)
+| File | Focus |
+|------|--------|
+| `calculations.test.ts` | `resolveAmounts`, `buildSummaries`, `buildMetrics`, labels |
+| `validatePlannerState.test.ts` | Coercion, rejection, amount padding, JSON errors |
 
 ---
 
-## File map
+## File map (current)
 
-| File | Role | Lines of interest |
-|------|------|-------------------|
-| `src/App.tsx` | Composition root | Wires hook + presets; layout order |
-| `src/types.ts` | Shared contracts | `FillMode`, `LineItem`, `PlannerState` |
-| `src/hooks/usePlanner.ts` | State machine | `defaultState`, load/save, CRUD |
-| `src/utils/calculations.ts` | P&L math | `resolveAmounts`, `buildSummaries` |
-| `src/components/Header.tsx` | Business setup | name, start month/year, cash |
-| `src/components/LineItemSection.tsx` | Editor | Section + `LineItemCard` + fill modes |
-| `src/components/Dashboard.tsx` | KPIs | Totals, burn, first profit month |
-| `src/components/Charts.tsx` | Visuals | Bar / Area / Line via Recharts |
-| `src/components/MonthlyTable.tsx` | Detail grid | 12 rows + year footer totals |
-| `src/components/ExportBar.tsx` | Persistence UX | JSON download/upload, reset |
-| `src/App.css` + `index.css` | Theme & layout | CSS variables, dark UI |
-| `vite.config.ts` | Build | `base = VITE_BASE_PATH ?? '/'` |
-| `.github/workflows/deploy.yml` | CI deploy | `npm ci` → build → Pages artifact |
+| Path | Role |
+|------|------|
+| `src/App.tsx` | Composition; wires presets + `forecastMonthLabels` |
+| `src/types.ts` | Shared contracts |
+| `src/hooks/usePlanner.ts` | State machine; storage key export |
+| `src/utils/defaults.ts` | Fresh defaults factory |
+| `src/utils/validatePlannerState.ts` | Trust boundary for JSON |
+| `src/utils/calculations.ts` | Deterministic P&L + metrics |
+| `src/components/*` | Presentational UI |
+| `src/App.css` / `index.css` | Dark theme + layout |
+| `vite.config.ts` | Pages `base` + Vitest config |
+| `.github/workflows/deploy.yml` | Build + deploy Pages |
 
-### Not present (yet)
+### Still not present (by design)
 
-No router, no auth, no API, no unit tests, no scenario compare, no multi-currency, no tax/COGS split, no CSV export.
+No router, auth, API, scenarios, COGS/categories, multi-currency, CSV export, or light mode.
 
 ---
 
@@ -112,137 +120,143 @@ No router, no auth, no API, no unit tests, no scenario compare, no multi-currenc
 
 | Field | Type | Meaning |
 |-------|------|---------|
-| `businessName` | string | Display label only |
-| `startMonth` | 0–11 | Calendar month for month 1 |
+| `businessName` | string | Display label |
+| `startMonth` | 0–11 | Calendar month of forecast month 1 |
 | `startYear` | number | Year of month 1 |
-| `startingCash` | number | Opening balance before month 1 net |
-| `revenue` | `LineItem[]` | Income streams |
-| `expenses` | `LineItem[]` | Cost streams |
+| `startingCash` | number | Opening cash before month-1 net |
+| `revenue` | `LineItem[]` | Income lines |
+| `expenses` | `LineItem[]` | Cost lines |
 
 ### `LineItem`
 
 | Field | Used when |
 |-------|-----------|
-| `id` | Always — React key + updates |
-| `name` | Always — label |
-| `fillMode` | Chooses which fields drive the 12 months |
+| `id` | Always |
+| `name` | Always |
+| `fillMode` | Chooses calculation path |
 | `uniformAmount` | `uniform` + `growth` (month-1 base) |
-| `growthPercent` | `growth` only (MoM compound) |
-| `amounts[12]` | `manual` only — uniform/growth ignore it |
+| `growthPercent` | `growth` only |
+| `amounts` | `manual` only (always length 12 after normalize) |
 
-**Design note:** Unused fields stay on the object when you switch modes (e.g. manual amounts survive if you flip to uniform). That is intentional for UX, but import validation should still normalize length and types.
+Switching fill modes keeps unused fields on the object (UX-friendly). Load/import always re-normalizes `amounts` to 12 finite numbers.
 
-### `MonthSummary` (derived, not stored)
+### Derived (not stored)
 
-`label`, `revenue`, `expenses`, `net` (= rev − exp), `cumulative` cash (`startingCash` + running nets). Built fresh on every render from `PlannerState`.
+- **`MonthSummary`**: `label`, `revenue`, `expenses`, `net`, `cumulative`
+- **`PlannerMetrics`**: year totals, lowest cash, first profitable month, average monthly loss, runway label
 
 ---
 
-## Calculations & state
+## Calculations & metrics
 
-### `resolveAmounts(line)`
+### `resolveAmounts`
 
-| Mode | Formula |
-|------|---------|
-| `uniform` | 12 × `uniformAmount` |
-| `growth` | m0 = `uniformAmount`; each next ×= `(1 + growth%/100)`; rounded to cents |
-| `manual` | `amounts[0..11]` padded with zeros |
+| Mode | Behavior |
+|------|----------|
+| `uniform` | 12 × finite `uniformAmount` |
+| `growth` | Compound MoM from month 1; round to cents each month; non-finite → 0 |
+| `manual` | 12 cells from `amounts`; pad/truncate; non-finite → 0 |
 
-### `buildSummaries(state)`
+### `buildSummaries`
 
-1. Sum all revenue lines per month
-2. Sum all expense lines
-3. `net = revenue − expenses`
-4. Cash starts at `startingCash` and adds `net` each month
-5. Calendar labels roll year correctly when `startMonth + i ≥ 12` (e.g. start Oct 2026 → Sep 2027)
+Sums revenue and expense lines per month, nets them, runs cash from `startingCash`. Labels from `forecastMonthLabels` (handles year rollover).
 
-### State hook quirks
+### `buildMetrics` (authoritative definitions)
 
-| Behavior | Detail | Risk |
-|----------|--------|------|
-| `loadState` on first render | `useState(loadState)` — no SSR | Fine for Pages SPA |
-| Save every change | `useEffect` writes full JSON | OK; no debounce needed at this size |
-| `reset()` | Sets `defaultState` object | Shares same default object ref if mutated later — prefer `structuredClone` |
-| `importState` | Shallow merge with default | Does not deep-validate line items |
-| `removeLineItem` | UI blocks last remove (`canRemove`) | Hook itself allows empty arrays |
+| Metric | Definition |
+|--------|------------|
+| First profitable month | First month with **net > 0** (strict); else “Not in year 1” |
+| Average monthly loss | Mean of \|net\| over months with **net < 0**; else `$0` |
+| Cash runway | If starting cash **&lt; 0** → `Already negative`; else first month with **ending cash &lt; 0**; else `12+ months` |
 
-### Metric naming drift
+---
 
-Dashboard **“First profitable month”** is the first month with `net ≥ 0` (monthly profit), **not** cash break-even (`cumulative ≥ 0`).
+## Persistence & trust
 
-**“Avg monthly burn”** averages only loss months’ absolute net — useful, but not classic runway burn.
+| Path | Behavior |
+|------|----------|
+| localStorage load | `parsePlannerJson`; on failure → `createDefaultState()` |
+| Import file | Parse/validate; on failure → **keep current plan** + inline error |
+| Reset | `confirm()` then `createDefaultState()` (new object graph) |
+| Export | Download current `PlannerState` as JSON |
+
+### Validation choices
+
+- Root must be an object; `revenue` / `expenses` must be arrays
+- Numeric strings coerced; invalid `fillMode` → `uniform`
+- `startMonth` clamped to 0–11; year outside 1970–2200 → fallback year
+- Non-object line entries dropped; if array had only junk → reject array
+- No extra runtime schema library (hand-rolled, dependency-free)
 
 ---
 
 ## UI layers
 
-### Screen layout (top → bottom)
+| # | Block | Job |
+|---|-------|-----|
+| 1 | Header | Setup window + opening cash |
+| 2 | Dashboard | Year-level KPIs + runway |
+| 3 | Revenue \| Expenses | Main editing |
+| 4 | Charts | Trends |
+| 5 | Monthly table | Exact audit |
+| 6 | Export bar | Backup / restore / wipe + status |
 
-| # | Block | User job |
-|---|-------|----------|
-| 1 | Header | Name the business + planning window + opening cash |
-| 2 | Dashboard | Read year-level health at a glance |
-| 3 | Revenue \| Expenses | Enter / edit line items (main work) |
-| 4 | Charts | See trends |
-| 5 | Monthly table | Audit exact numbers |
-| 6 | Export bar | Backup / restore / wipe |
+### UX notes
 
-### UX strengths
-
-- Preset chips speed up common expense/revenue types
-- Yearly total per line updates live
-- Color coding: green revenue / red expenses
-- Responsive: stacks columns under ~900px
-
-### UX friction
-
-- Dashboard sits above editors — numbers update after scroll
-- Manual months labeled M1–M12, not Jan–Dec
-- Currency hard-coded USD
-- `confirm()` / `alert()` for reset & import errors
-- No undo; reset wipes immediately after confirm
-
-### Styling
-
-Dark theme via CSS variables in `index.css` (DM Sans + JetBrains Mono). `App.css` holds component layout. No component library — intentional for a small Pages site.
+- Manual cells labeled with real months (e.g. `Jan 2027`), not `M1`–`M12`
+- Month grid uses `minmax(0, 1fr)`; 3 columns on small screens
+- Line name inputs and remove buttons have accessible names; fill modes use a `fieldset`
+- Starting-cash input still has `min={0}` in the UI (negative cash mainly via import)
 
 ---
 
 ## Suggested improvement backlog
 
-Ordered by leverage for a first-year planning tool.
-
-### P0 — Correctness & trust
-
-| Idea | Why |
-|------|-----|
-| Unit tests for `resolveAmounts` + `buildSummaries` | Locks growth math, year rollover, cash chain |
-| Validate import / localStorage shape | Prevents silent `NaN` and broken line items |
-| Clarify dashboard metrics | Rename or add cash break-even vs first profitable month |
-| Clone `defaultState` on reset | Avoid shared mutable default object |
+P0 from the prior audit is largely **done**. Next candidates:
 
 ### P1 — Planning power
 
 | Idea | Why |
 |------|-----|
-| COGS / gross margin (or expense categories) | Real P&L usually separates cost of goods |
+| Runway in months (numeric) + burn clarification | Founders often want “N months left” as a number |
 | One-time vs recurring costs | Launch spend vs monthly burn |
-| Runway estimate (months until cash = 0) | Most founders ask this first |
-| Scenario A/B (optimistic / base / lean) | Compare plans without overwriting |
-| CSV export | Drop into Sheets / Excel / investors |
+| Expense/revenue categories or COGS | Closer to a real P&L |
+| Scenario A/B (base / lean / optimistic) | Compare without overwriting |
+| CSV export | Sheets / Excel / investors |
 
-### P2 — UX polish
+### P2 — UX & delivery
 
 | Idea | Why |
 |------|-----|
-| Sticky summary bar while editing | Keep net/cash visible without scrolling |
-| Month labels = actual calendar months | Less mental mapping than M1–M12 |
+| Sticky summary while editing | Net/cash always visible |
+| Allow negative starting cash in the Header UI | Align UI with runway edge case |
 | Currency / locale selector | Not everyone plans in USD |
-| Code-split Recharts | Smaller first paint (~586 KB chunk today) |
-| Light mode toggle | Dark-only may not suit printing / daytime use |
+| Code-split Recharts | Smaller first paint |
+| Light mode / print stylesheet | Daytime use and printing |
+| Component tests (ExportBar / Dashboard) | Catch wiring regressions |
+
+### P3 — Hygiene
+
+| Idea | Why |
+|------|-----|
+| Update this audit when shipping major slices | Keep planning docs honest |
+| Optional `npm audit` / dependency bumps | Vitest/Vite notices over time |
 
 ---
 
 ## How to use this audit
 
-Pick a priority band or a specific row (e.g. “add runway + fix metric labels” or “tests first”) and implement that slice next.
+1. Pick a backlog row (or a small theme like “CSV + sticky summary”).
+2. Implement that slice without expanding scope.
+3. Keep calculations in `utils/` with Vitest coverage.
+4. Revisit this file after the next meaningful release.
+
+### Local commands
+
+```bash
+npm run dev          # local app
+npm test             # Vitest once
+npm run test:watch   # Vitest watch
+npm run build        # tsc + production bundle
+npm run lint         # ESLint
+```
