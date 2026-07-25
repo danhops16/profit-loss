@@ -1,9 +1,16 @@
-import type { PlannerState } from '../types'
-import { MONTHS } from '../types'
+import type { CurrencyCode, PlannerState } from '../types'
+import { CURRENCY_CODES, MONTHS } from '../types'
 
 interface HeaderProps {
   state: PlannerState
-  onUpdate: (patch: Partial<PlannerState>) => void
+  onUpdate: (
+    patch: Partial<
+      Pick<
+        PlannerState,
+        'businessName' | 'startMonth' | 'startYear' | 'startingCash' | 'currency'
+      >
+    >,
+  ) => void
 }
 
 export function Header({ state, onUpdate }: HeaderProps) {
@@ -14,7 +21,7 @@ export function Header({ state, onUpdate }: HeaderProps) {
       <div>
         <h1>Year-one profit &amp; loss</h1>
         <p className="subtitle">
-          Model monthly revenue and costs for your first 12 months
+          Forecast revenue, costs, and cash for your first 12 months
         </p>
       </div>
       <div className="setup-grid">
@@ -57,15 +64,36 @@ export function Header({ state, onUpdate }: HeaderProps) {
           <span>Starting cash</span>
           <input
             type="number"
-            min={0}
             step={100}
-            value={state.startingCash || ''}
-            onChange={(e) =>
-              onUpdate({ startingCash: Number(e.target.value) || 0 })
-            }
+            value={state.startingCash === 0 ? 0 : state.startingCash || ''}
+            onChange={(e) => {
+              const raw = e.target.value
+              if (raw === '' || raw === '-') {
+                onUpdate({ startingCash: raw === '-' ? state.startingCash : 0 })
+                return
+              }
+              const n = Number(raw)
+              if (Number.isFinite(n)) onUpdate({ startingCash: n })
+            }}
           />
         </label>
+        <label className="field">
+          <span>Display currency</span>
+          <select
+            value={state.currency}
+            onChange={(e) => onUpdate({ currency: e.target.value as CurrencyCode })}
+          >
+            {CURRENCY_CODES.map((code) => (
+              <option key={code} value={code}>
+                {code}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
+      <p className="currency-note">
+        Currency changes formatting only — amounts are not converted.
+      </p>
     </header>
   )
 }

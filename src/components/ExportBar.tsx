@@ -1,36 +1,67 @@
-import { useRef } from 'react'
+import { useId, useRef, useState } from 'react'
 import type { PlannerState } from '../types'
+import { buildActiveScenarioCsv, csvFilename, downloadTextFile } from '../utils/csvExport'
+import { getActiveScenario } from '../utils/defaults'
+import { parsePlannerJson } from '../utils/validatePlannerState'
 
 interface ExportBarProps {
   state: PlannerState
-  onImport: (state: PlannerState) => void
+  onImport: (data: unknown) => string | null
   onReset: () => void
 }
 
 export function ExportBar({ state, onImport, onReset }: ExportBarProps) {
   const fileRef = useRef<HTMLInputElement>(null)
+  const statusId = useId()
+  const [status, setStatus] = useState<{ tone: 'error' | 'success'; message: string } | null>(
+    null,
+  )
 
   const exportJson = () => {
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${state.businessName.replace(/\s+/g, '-').toLowerCase() || 'planner'}-year1.json`
+    const scenario = getActiveScenario(state)
+    a.download = `${state.businessName.replace(/\s+/g, '-').toLowerCase() || 'planner'}-${scenario.name.replace(/\s+/g, '-').toLowerCase()}-year1.json`
     a.click()
     URL.revokeObjectURL(url)
+    setStatus({ tone: 'success', message: 'Plan exported as JSON.' })
+  }
+
+  const exportCsv = () => {
+    const scenario = getActiveScenario(state)
+    const csv = buildActiveScenarioCsv(state, scenario)
+    downloadTextFile(csvFilename(state, scenario), csv, 'text/csv;charset=utf-8')
+    setStatus({ tone: 'success', message: 'Active scenario exported as CSV.' })
   }
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+
     const reader = new FileReader()
     reader.onload = () => {
-      try {
-        const data = JSON.parse(reader.result as string) as PlannerState
-        onImport(data)
-      } catch {
-        alert('Could not read that file. Please use a planner export (.json).')
+      const text = typeof reader.result === 'string' ? reader.result : ''
+      const parsed = parsePlannerJson(text)
+      if (!parsed.ok) {
+        setStatus({ tone: 'error', message: parsed.error })
+        return
       }
+
+      const error = onImport(parsed.state)
+      if (error) {
+        setStatus({ tone: 'error', message: error })
+        return
+      }
+
+      setStatus({ tone: 'success', message: 'Plan imported successfully.' })
+    }
+    reader.onerror = () => {
+      setStatus({
+        tone: 'error',
+        message: 'Could not read that file. Please try again.',
+      })
     }
     reader.readAsText(file)
     e.target.value = ''
@@ -38,12 +69,30 @@ export function ExportBar({ state, onImport, onReset }: ExportBarProps) {
 
   return (
     <footer className="export-bar">
-      <p>Your plan saves automatically in this browser.</p>
+      <div className="export-bar__copy">
+        <p>Your plan saves automatically in this browser.</p>
+        <p
+          id={statusId}
+          className={`export-status export-status--${status?.tone ?? 'idle'}`}
+          role="status"
+          aria-live="polite"
+        >
+          {status?.message ?? ''}
+        </p>
+      </div>
       <div className="export-actions">
         <button type="button" className="btn btn--ghost" onClick={exportJson}>
           Export JSON
         </button>
-        <button type="button" className="btn btn--ghost" onClick={() => fileRef.current?.click()}>
+        <button type="button" className="btn btn--ghost" onClick={exportCsv}>
+          Export CSV
+        </button>
+        <button
+          type="button"
+          className="btn btn--ghost"
+          onClick={() => fileRef.current?.click()}
+          aria-describedby={statusId}
+        >
           Import JSON
         </button>
         <input
@@ -51,6 +100,7 @@ export function ExportBar({ state, onImport, onReset }: ExportBarProps) {
           type="file"
           accept=".json,application/json"
           hidden
+          aria-label="Choose a planner JSON file to import"
           onChange={handleFile}
         />
         <button type="button" className="btn btn--ghost btn--danger" onClick={onReset}>

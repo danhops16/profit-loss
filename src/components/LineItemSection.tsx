@@ -1,15 +1,20 @@
-import type { LineItem } from '../types'
-import { formatCurrency, resolveAmounts } from '../utils/calculations'
+import type { ExpenseCategory, ExpenseLineItem, LineItem } from '../types'
+import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_LABELS } from '../types'
+import { resolveAmounts } from '../utils/calculations'
+import { formatMoney } from '../utils/formatMoney'
+import type { CurrencyCode } from '../types'
 
 interface LineItemSectionProps {
   title: string
   kind: 'revenue' | 'expenses'
-  items: LineItem[]
+  items: LineItem[] | ExpenseLineItem[]
   accent: 'green' | 'red'
-  presets?: string[]
-  onAdd: (name?: string) => void
+  monthLabels: string[]
+  currency: CurrencyCode
+  presets?: Array<{ name: string; category?: ExpenseCategory }>
+  onAdd: (name?: string, category?: ExpenseCategory) => void
   onRemove: (id: string) => void
-  onUpdate: (id: string, patch: Partial<LineItem>) => void
+  onUpdate: (id: string, patch: Partial<LineItem | ExpenseLineItem>) => void
 }
 
 export function LineItemSection({
@@ -17,24 +22,28 @@ export function LineItemSection({
   kind,
   items,
   accent,
+  monthLabels,
+  currency,
   presets = [],
   onAdd,
   onRemove,
   onUpdate,
 }: LineItemSectionProps) {
+  const sectionId = `${kind}-heading`
+
   return (
-    <section className={`section section--${accent}`}>
+    <section className={`section section--${accent}`} aria-labelledby={sectionId}>
       <div className="section-head">
-        <h2>{title}</h2>
+        <h2 id={sectionId}>{title}</h2>
         <div className="section-actions">
-          {presets.map((name) => (
+          {presets.map((preset) => (
             <button
-              key={name}
+              key={preset.name}
               type="button"
               className="btn btn--ghost btn--sm"
-              onClick={() => onAdd(name)}
+              onClick={() => onAdd(preset.name, preset.category)}
             >
-              + {name}
+              + {preset.name}
             </button>
           ))}
           <button
@@ -55,6 +64,9 @@ export function LineItemSection({
             <LineItemCard
               key={item.id}
               item={item}
+              kind={kind}
+              monthLabels={monthLabels}
+              currency={currency}
               canRemove={items.length > 1}
               onRemove={() => onRemove(item.id)}
               onUpdate={(patch) => onUpdate(item.id, patch)}
@@ -68,41 +80,80 @@ export function LineItemSection({
 
 function LineItemCard({
   item,
+  kind,
+  monthLabels,
+  currency,
   canRemove,
   onRemove,
   onUpdate,
 }: {
-  item: LineItem
+  item: LineItem | ExpenseLineItem
+  kind: 'revenue' | 'expenses'
+  monthLabels: string[]
+  currency: CurrencyCode
   canRemove: boolean
   onRemove: () => void
-  onUpdate: (patch: Partial<LineItem>) => void
+  onUpdate: (patch: Partial<LineItem | ExpenseLineItem>) => void
 }) {
   const resolved = resolveAmounts(item)
   const yearlyTotal = resolved.reduce((a, b) => a + b, 0)
+  const nameId = `line-name-${item.id}`
+  const modeGroup = `mode-${item.id}`
+  const expense = kind === 'expenses' ? (item as ExpenseLineItem) : null
 
   return (
-    <article className="line-card">
+    <article className="line-card" aria-label={`${kind} line: ${item.name || 'Untitled'}`}>
       <div className="line-card__head">
+        <label className="visually-hidden" htmlFor={nameId}>
+          Line item name
+        </label>
         <input
+          id={nameId}
           type="text"
           className="line-name"
           value={item.name}
           onChange={(e) => onUpdate({ name: e.target.value })}
           placeholder="Line item name"
         />
-        <span className="line-yearly">{formatCurrency(yearlyTotal)}/yr</span>
+        <span className="line-yearly">{formatMoney(yearlyTotal, currency)}/yr</span>
         {canRemove && (
-          <button type="button" className="btn-icon" onClick={onRemove} title="Remove">
+          <button
+            type="button"
+            className="btn-icon"
+            onClick={onRemove}
+            aria-label={`Remove ${item.name || 'line item'}`}
+            title="Remove"
+          >
             ×
           </button>
         )}
       </div>
 
-      <div className="fill-mode">
+      {expense && (
+        <label className="inline-field category-field">
+          <span>Category</span>
+          <select
+            value={expense.category}
+            onChange={(e) =>
+              onUpdate({ category: e.target.value as ExpenseCategory })
+            }
+            aria-label={`Category for ${item.name || 'expense'}`}
+          >
+            {EXPENSE_CATEGORIES.map((cat) => (
+              <option key={cat} value={cat}>
+                {EXPENSE_CATEGORY_LABELS[cat]}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+
+      <fieldset className="fill-mode">
+        <legend className="visually-hidden">How to fill monthly amounts</legend>
         <label>
           <input
             type="radio"
-            name={`mode-${item.id}`}
+            name={modeGroup}
             checked={item.fillMode === 'uniform'}
             onChange={() => onUpdate({ fillMode: 'uniform' })}
           />
@@ -111,7 +162,7 @@ function LineItemCard({
         <label>
           <input
             type="radio"
-            name={`mode-${item.id}`}
+            name={modeGroup}
             checked={item.fillMode === 'growth'}
             onChange={() => onUpdate({ fillMode: 'growth' })}
           />
@@ -120,13 +171,22 @@ function LineItemCard({
         <label>
           <input
             type="radio"
-            name={`mode-${item.id}`}
+            name={modeGroup}
+            checked={item.fillMode === 'one-time'}
+            onChange={() => onUpdate({ fillMode: 'one-time' })}
+          />
+          One-time
+        </label>
+        <label>
+          <input
+            type="radio"
+            name={modeGroup}
             checked={item.fillMode === 'manual'}
             onChange={() => onUpdate({ fillMode: 'manual' })}
           />
           Custom per month
         </label>
-      </div>
+      </fieldset>
 
       {item.fillMode === 'uniform' && (
         <label className="inline-field">
@@ -171,20 +231,55 @@ function LineItemCard({
         </div>
       )}
 
+      {item.fillMode === 'one-time' && (
+        <div className="inline-row">
+          <label className="inline-field">
+            <span>Amount</span>
+            <input
+              type="number"
+              min={0}
+              step={50}
+              value={item.uniformAmount || ''}
+              onChange={(e) =>
+                onUpdate({ uniformAmount: Number(e.target.value) || 0 })
+              }
+            />
+          </label>
+          <label className="inline-field">
+            <span>Forecast month</span>
+            <select
+              value={item.oneTimeMonth}
+              onChange={(e) =>
+                onUpdate({ oneTimeMonth: Number(e.target.value) })
+              }
+            >
+              {monthLabels.map((label, i) => (
+                <option key={label} value={i}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      )}
+
       {item.fillMode === 'manual' && (
         <div className="month-grid">
-          {resolved.map((_, i) => (
-            <label key={i} className="month-cell">
-              <span>M{i + 1}</span>
+          {monthLabels.map((label, i) => (
+            <label key={`${item.id}-${label}`} className="month-cell">
+              <span title={label}>{label}</span>
               <input
                 type="number"
                 min={0}
                 step={50}
+                aria-label={`Amount for ${label}`}
                 value={item.amounts[i] || ''}
                 onChange={(e) => {
-                  const amounts = [...item.amounts]
-                  while (amounts.length < 12) amounts.push(0)
-                  amounts[i] = Number(e.target.value) || 0
+                  const amounts = Array.from({ length: 12 }, (_, idx) =>
+                    idx === i
+                      ? Number(e.target.value) || 0
+                      : item.amounts[idx] ?? 0,
+                  )
                   onUpdate({ amounts })
                 }}
               />
