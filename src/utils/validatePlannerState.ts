@@ -1,24 +1,43 @@
 import type {
+  CashPurpose,
   CurrencyCode,
   ExpenseCategory,
   ExpenseLineItem,
   FillMode,
+  FundingLineItem,
+  FundingType,
   LineItem,
+  OpeningFundSource,
+  OpeningFundType,
   PlannerState,
   Scenario,
 } from '../types'
 import {
+  CASH_PURPOSES,
   CURRENCY_CODES,
   EXPENSE_CATEGORIES,
+  OPENING_FUND_TYPES,
   SCHEMA_VERSION,
 } from '../types'
-import { createEmptyExpenseLineItem, createEmptyLineItem, createId } from './defaults'
+import {
+  createEmptyExpenseLineItem,
+  createEmptyFundingLineItem,
+  createEmptyLineItem,
+  createId,
+  createOpeningFund,
+} from './defaults'
 
 export type ParsePlannerResult =
   | { ok: true; state: PlannerState }
   | { ok: false; error: string }
 
-const FILL_MODES: readonly FillMode[] = ['manual', 'uniform', 'growth', 'one-time']
+const FILL_MODES: readonly FillMode[] = [
+  'manual',
+  'uniform',
+  'growth',
+  'one-time',
+  'percent-revenue',
+]
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -35,11 +54,7 @@ export function toFiniteNumber(value: unknown, fallback = 0): number {
 
 export function normalizeAmounts(value: unknown): number[] {
   const source = Array.isArray(value) ? value : []
-  const result: number[] = []
-  for (let i = 0; i < 12; i++) {
-    result.push(toFiniteNumber(source[i], 0))
-  }
-  return result
+  return Array.from({ length: 12 }, (_, i) => toFiniteNumber(source[i], 0))
 }
 
 function normalizeFillMode(value: unknown): FillMode {
@@ -62,8 +77,7 @@ function normalizeName(value: unknown): string {
 
 function normalizeOneTimeMonth(value: unknown): number {
   const n = Math.trunc(toFiniteNumber(value, 0))
-  if (n < 0 || n > 11) return 0
-  return n
+  return n < 0 || n > 11 ? 0 : n
 }
 
 function normalizeCategory(value: unknown): ExpenseCategory {
@@ -76,6 +90,18 @@ function normalizeCategory(value: unknown): ExpenseCategory {
   return 'other'
 }
 
+function normalizeCashPurpose(
+  value: unknown,
+  categoryFallback?: ExpenseCategory,
+): CashPurpose {
+  if (typeof value === 'string' && (CASH_PURPOSES as readonly string[]).includes(value)) {
+    return value as CashPurpose
+  }
+  // v2 migration: cogs → direct, else operating
+  if (categoryFallback === 'cogs') return 'direct'
+  return 'operating'
+}
+
 function normalizeCurrency(value: unknown): CurrencyCode {
   if (
     typeof value === 'string' &&
@@ -86,8 +112,36 @@ function normalizeCurrency(value: unknown): CurrencyCode {
   return 'USD'
 }
 
+function normalizeFundType(value: unknown): OpeningFundType {
+  if (
+    typeof value === 'string' &&
+    (OPENING_FUND_TYPES as readonly string[]).includes(value)
+  ) {
+    return value as OpeningFundType
+  }
+  return 'other'
+}
+
+function normalizeFundingType(value: unknown): FundingType {
+  return normalizeFundType(value)
+}
+
+function normalizeStartMonth(value: unknown, fallback: number): number {
+  const n = Math.trunc(toFiniteNumber(value, fallback))
+  return n < 0 || n > 11 ? fallback : n
+}
+
+function normalizeStartYear(value: unknown, fallback: number): number {
+  const n = Math.trunc(toFiniteNumber(value, fallback))
+  return n < 1970 || n > 2200 ? fallback : n
+}
+
 export function normalizeLineItem(value: unknown): LineItem | null {
   if (!isRecord(value)) return null
+  const revenueBasisId =
+    typeof value.revenueBasisId === 'string' && value.revenueBasisId.length > 0
+      ? value.revenueBasisId
+      : null
 
   return {
     id: normalizeId(value.id),
@@ -97,82 +151,92 @@ export function normalizeLineItem(value: unknown): LineItem | null {
     uniformAmount: toFiniteNumber(value.uniformAmount, 0),
     growthPercent: toFiniteNumber(value.growthPercent, 0),
     oneTimeMonth: normalizeOneTimeMonth(value.oneTimeMonth),
+    percentOfRevenue: toFiniteNumber(value.percentOfRevenue, 0),
+    revenueBasisId,
   }
 }
 
 export function normalizeExpenseLineItem(value: unknown): ExpenseLineItem | null {
   const base = normalizeLineItem(value)
-  if (!base) return null
-  const category = isRecord(value) ? normalizeCategory(value.category) : 'other'
-  return { ...base, category }
+  if (!base || !isRecord(value)) return null
+  const category = normalizeCategory(value.category)
+  return {
+    ...base,
+    category,
+    cashPurpose: normalizeCashPurpose(value.cashPurpose, category),
+  }
 }
 
-function normalizeLineItemList(value: unknown): LineItem[] | null {
-  if (!Array.isArray(value)) return null
-  const items: LineItem[] = []
-  for (const entry of value) {
-    const item = normalizeLineItem(entry)
-    if (item) items.push(item)
+export function normalizeFundingLineItem(value: unknown): FundingLineItem | null {
+  const base = normalizeLineItem(value)
+  if (!base || !isRecord(value)) return null
+  return {
+    ...base,
+    fundingType: normalizeFundingType(value.fundingType),
   }
+}
+
+function normalizeLineList(value: unknown): LineItem[] | null {
+  if (!Array.isArray(value)) return null
+  const items = value
+    .map((entry) => normalizeLineItem(entry))
+    .filter((x): x is LineItem => x !== null)
   if (value.length > 0 && items.length === 0) return null
   return items
 }
 
 function normalizeExpenseList(value: unknown): ExpenseLineItem[] | null {
   if (!Array.isArray(value)) return null
-  const items: ExpenseLineItem[] = []
-  for (const entry of value) {
-    const item = normalizeExpenseLineItem(entry)
-    if (item) items.push(item)
-  }
+  const items = value
+    .map((entry) => normalizeExpenseLineItem(entry))
+    .filter((x): x is ExpenseLineItem => x !== null)
   if (value.length > 0 && items.length === 0) return null
   return items
 }
 
-function normalizeStartMonth(value: unknown, fallback: number): number {
-  const n = Math.trunc(toFiniteNumber(value, fallback))
-  if (n < 0 || n > 11) return fallback
-  return n
+function normalizeFundingList(value: unknown): FundingLineItem[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((entry) => normalizeFundingLineItem(entry))
+    .filter((x): x is FundingLineItem => x !== null)
 }
 
-function normalizeStartYear(value: unknown, fallback: number): number {
-  const n = Math.trunc(toFiniteNumber(value, fallback))
-  if (n < 1970 || n > 2200) return fallback
-  return n
+function normalizeOpeningFunds(value: unknown, legacyStartingCash?: unknown): OpeningFundSource[] {
+  if (Array.isArray(value) && value.length > 0) {
+    const funds: OpeningFundSource[] = []
+    for (const entry of value) {
+      if (!isRecord(entry)) continue
+      funds.push({
+        id: normalizeId(entry.id),
+        name: normalizeName(entry.name) || 'Opening funds',
+        type: normalizeFundType(entry.type),
+        amount: toFiniteNumber(entry.amount, 0),
+      })
+    }
+    if (funds.length > 0) return funds
+  }
+
+  const amount = toFiniteNumber(legacyStartingCash, 0)
+  return [createOpeningFund('Opening funds', 'other', amount)]
 }
 
 function normalizeScenario(value: unknown): Scenario | null {
   if (!isRecord(value)) return null
-  const revenue = normalizeLineItemList(value.revenue)
+  const revenue = normalizeLineList(value.revenue)
   const expenses = normalizeExpenseList(value.expenses)
   if (revenue === null || expenses === null) return null
   return {
     id: normalizeId(value.id),
     name: normalizeName(value.name) || 'Scenario',
+    notes: typeof value.notes === 'string' ? value.notes : '',
     revenue,
     expenses,
+    funding: normalizeFundingList(value.funding),
   }
 }
 
-function migrateV1ToV2(input: Record<string, unknown>): ParsePlannerResult {
-  const revenue = normalizeLineItemList(input.revenue)
-  const expenses = normalizeExpenseList(input.expenses)
-  if (revenue === null) {
-    return { ok: false, error: 'Plan is missing a valid "revenue" array.' }
-  }
-  if (expenses === null) {
-    return { ok: false, error: 'Plan is missing a valid "expenses" array.' }
-  }
-
+function sharedFields(input: Record<string, unknown>) {
   const fallbackYear = new Date().getFullYear()
-  const scenarioId = createId()
-  const scenario: Scenario = {
-    id: scenarioId,
-    name: 'Base',
-    revenue,
-    expenses,
-  }
-
   const businessName =
     typeof input.businessName === 'string'
       ? input.businessName
@@ -181,25 +245,50 @@ function migrateV1ToV2(input: Record<string, unknown>): ParsePlannerResult {
         : String(input.businessName)
 
   return {
+    businessName,
+    startMonth: normalizeStartMonth(input.startMonth, 0),
+    startYear: normalizeStartYear(input.startYear, fallbackYear),
+    currency: normalizeCurrency(input.currency),
+    cashBuffer: toFiniteNumber(input.cashBuffer, 0),
+    openingFunds: normalizeOpeningFunds(input.openingFunds, input.startingCash),
+  }
+}
+
+function migrateFlatToV3(input: Record<string, unknown>): ParsePlannerResult {
+  const revenue = normalizeLineList(input.revenue)
+  const expenses = normalizeExpenseList(input.expenses)
+  if (revenue === null) {
+    return { ok: false, error: 'Plan is missing a valid "revenue" array.' }
+  }
+  if (expenses === null) {
+    return { ok: false, error: 'Plan is missing a valid "expenses" array.' }
+  }
+
+  const scenarioId = createId()
+  const scenario: Scenario = {
+    id: scenarioId,
+    name: 'Base',
+    notes: '',
+    revenue,
+    expenses,
+    funding: normalizeFundingList(input.funding),
+  }
+
+  return {
     ok: true,
     state: {
       schemaVersion: SCHEMA_VERSION,
-      businessName,
-      startMonth: normalizeStartMonth(input.startMonth, 0),
-      startYear: normalizeStartYear(input.startYear, fallbackYear),
-      startingCash: toFiniteNumber(input.startingCash, 0),
-      currency: normalizeCurrency(input.currency),
+      ...sharedFields(input),
       activeScenarioId: scenarioId,
       scenarios: [scenario],
     },
   }
 }
 
-function parseV2(input: Record<string, unknown>): ParsePlannerResult {
+function parseMultiScenario(input: Record<string, unknown>): ParsePlannerResult {
   if (!Array.isArray(input.scenarios) || input.scenarios.length === 0) {
-    // Allow accidental half-migrated objects that still have top-level lines
     if (Array.isArray(input.revenue) || Array.isArray(input.expenses)) {
-      return migrateV1ToV2(input)
+      return migrateFlatToV3(input)
     }
     return { ok: false, error: 'Plan must include at least one scenario.' }
   }
@@ -213,14 +302,6 @@ function parseV2(input: Record<string, unknown>): ParsePlannerResult {
     return { ok: false, error: 'Plan scenarios are invalid.' }
   }
 
-  const fallbackYear = new Date().getFullYear()
-  const businessName =
-    typeof input.businessName === 'string'
-      ? input.businessName
-      : input.businessName == null
-        ? 'My Startup'
-        : String(input.businessName)
-
   let activeScenarioId =
     typeof input.activeScenarioId === 'string' ? input.activeScenarioId : scenarios[0].id
   if (!scenarios.some((s) => s.id === activeScenarioId)) {
@@ -231,11 +312,7 @@ function parseV2(input: Record<string, unknown>): ParsePlannerResult {
     ok: true,
     state: {
       schemaVersion: SCHEMA_VERSION,
-      businessName,
-      startMonth: normalizeStartMonth(input.startMonth, 0),
-      startYear: normalizeStartYear(input.startYear, fallbackYear),
-      startingCash: toFiniteNumber(input.startingCash, 0),
-      currency: normalizeCurrency(input.currency),
+      ...sharedFields(input),
       activeScenarioId,
       scenarios,
     },
@@ -243,28 +320,25 @@ function parseV2(input: Record<string, unknown>): ParsePlannerResult {
 }
 
 /**
- * Validate and normalize untrusted planner JSON (localStorage / import).
- * Supports unversioned v1 plans and schemaVersion 2 multi-scenario plans.
+ * Validate/normalize untrusted planner JSON.
+ * Accepts schema v1 (flat), v2 (scenarios), and v3 (cash-first).
  */
 export function parsePlannerState(input: unknown): ParsePlannerResult {
   if (!isRecord(input)) {
     return { ok: false, error: 'Plan must be a JSON object.' }
   }
 
-  const version = toFiniteNumber(input.schemaVersion, 0)
-
-  if (version >= 2 || Array.isArray(input.scenarios)) {
-    return parseV2(input)
+  if (Array.isArray(input.scenarios) || toFiniteNumber(input.schemaVersion, 0) >= 2) {
+    return parseMultiScenario(input)
   }
 
-  // Unversioned / v1 single-plan shape
   if (Array.isArray(input.revenue) || Array.isArray(input.expenses)) {
-    return migrateV1ToV2(input)
+    return migrateFlatToV3(input)
   }
 
   return {
     ok: false,
-    error: 'Unrecognized plan format. Expected a year-one P&L export.',
+    error: 'Unrecognized plan format. Expected a year-one cash planner export.',
   }
 }
 
@@ -281,22 +355,8 @@ export function parsePlannerJson(raw: string): ParsePlannerResult {
   return parsePlannerState(parsed)
 }
 
-/** Hint helpers for presets — not used by validation. */
-export function categoryForExpensePreset(name: string): ExpenseCategory {
-  const map: Record<string, ExpenseCategory> = {
-    Salaries: 'payroll',
-    'Rent & utilities': 'facilities',
-    Marketing: 'marketing',
-    'Software & tools': 'software',
-    Contractors: 'professional',
-    Insurance: 'other',
-    'Legal & accounting': 'professional',
-    Travel: 'other',
-    'Office supplies': 'other',
-    'Cost of goods': 'cogs',
-    COGS: 'cogs',
-  }
-  return map[name] ?? 'other'
+export {
+  createEmptyLineItem,
+  createEmptyExpenseLineItem,
+  createEmptyFundingLineItem,
 }
-
-export { createEmptyLineItem, createEmptyExpenseLineItem }

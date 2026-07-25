@@ -1,6 +1,6 @@
 import type { CurrencyCode } from '../types'
 import type { PlannerMetrics } from '../utils/calculations'
-import { formatMargin, formatMoney } from '../utils/formatMoney'
+import { formatMoney } from '../utils/formatMoney'
 
 interface StickySummaryProps {
   scenarioName: string
@@ -10,33 +10,33 @@ interface StickySummaryProps {
 
 export function StickySummary({ scenarioName, currency, metrics }: StickySummaryProps) {
   return (
-    <div className="sticky-summary" role="region" aria-label="Quick forecast summary">
+    <div className="sticky-summary" role="region" aria-label="Quick cash summary">
       <div className="sticky-summary__inner">
         <span className="sticky-chip">
           <span className="sticky-chip__label">Scenario</span>
           <strong>{scenarioName}</strong>
         </span>
         <span className="sticky-chip">
-          <span className="sticky-chip__label">Revenue</span>
-          <strong>{formatMoney(metrics.totalRevenue, currency)}</strong>
+          <span className="sticky-chip__label">Cash after month 1</span>
+          <strong>{formatMoney(metrics.cashAfterMonthOne, currency)}</strong>
         </span>
         <span className="sticky-chip">
-          <span className="sticky-chip__label">Net profit</span>
-          <strong className={metrics.yearNet >= 0 ? 'positive' : 'negative'}>
-            {formatMoney(metrics.yearNet, currency)}
+          <span className="sticky-chip__label">Lowest cash</span>
+          <strong className={metrics.lowestCash < 0 ? 'negative' : undefined}>
+            {formatMoney(metrics.lowestCash, currency)}
+          </strong>
+        </span>
+        <span className="sticky-chip">
+          <span className="sticky-chip__label">Personal funding needed</span>
+          <strong>
+            {metrics.personalFundingRequired > 0
+              ? formatMoney(metrics.personalFundingRequired, currency)
+              : 'None'}
           </strong>
         </span>
         <span className="sticky-chip">
           <span className="sticky-chip__label">Ending cash</span>
           <strong>{formatMoney(metrics.endingCash, currency)}</strong>
-        </span>
-        <span className="sticky-chip">
-          <span className="sticky-chip__label">Runway</span>
-          <strong>{metrics.runwayLabel}</strong>
-        </span>
-        <span className="sticky-chip sticky-chip--muted">
-          <span className="sticky-chip__label">Net margin</span>
-          <strong>{formatMargin(metrics.netMargin)}</strong>
         </span>
       </div>
     </div>

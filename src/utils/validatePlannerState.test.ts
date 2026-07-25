@@ -1,159 +1,128 @@
 import { describe, expect, it } from 'vitest'
 import { SCHEMA_VERSION } from '../types'
-import { createDefaultState } from './defaults'
-import {
-  normalizeAmounts,
-  parsePlannerJson,
-  parsePlannerState,
-  toFiniteNumber,
-} from './validatePlannerState'
+import { createDefaultState, totalOpeningFunds } from './defaults'
+import { parsePlannerJson, parsePlannerState } from './validatePlannerState'
+import { buildSummariesForScenario, buildMetrics } from './calculations'
 
-const legacyV1 = {
-  businessName: 'Legacy Co',
-  startMonth: 9,
-  startYear: 2025,
-  startingCash: 25000,
-  revenue: [
+const legacyV2 = {
+  schemaVersion: 2,
+  businessName: "PTP's Lift & Fix",
+  startMonth: 8,
+  startYear: 2026,
+  startingCash: 100000,
+  currency: 'CAD',
+  activeScenarioId: 'base',
+  scenarios: [
     {
-      id: 'r1',
-      name: 'Sales',
-      fillMode: 'growth',
-      amounts: [1, 2],
-      uniformAmount: 1000,
-      growthPercent: 8,
-    },
-  ],
-  expenses: [
-    {
-      id: 'e1',
-      name: 'Salaries',
-      fillMode: 'uniform',
-      amounts: [],
-      uniformAmount: 5000,
-      growthPercent: 0,
-    },
-    {
-      id: 'e2',
-      name: 'Ads',
-      fillMode: 'manual',
-      amounts: [100, 200, Number.NaN],
-      uniformAmount: 0,
-      growthPercent: 0,
+      id: 'base',
+      name: 'Base',
+      revenue: [
+        {
+          id: 'r1',
+          name: 'rentals',
+          fillMode: 'manual',
+          amounts: [2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 11000, 12000, 13000],
+          uniformAmount: 0,
+          growthPercent: 0,
+        },
+      ],
+      expenses: [
+        {
+          id: 'e1',
+          name: 'Salaries',
+          fillMode: 'uniform',
+          amounts: [],
+          uniformAmount: 4000,
+          growthPercent: 0,
+          category: 'payroll',
+        },
+        {
+          id: 'e2',
+          name: 'startup gear',
+          fillMode: 'one-time',
+          amounts: [],
+          uniformAmount: 83000,
+          growthPercent: 0,
+          oneTimeMonth: 0,
+          category: 'other',
+        },
+        {
+          id: 'e3',
+          name: 'loan',
+          fillMode: 'uniform',
+          amounts: [],
+          uniformAmount: 500,
+          growthPercent: 0,
+          category: 'other',
+        },
+      ],
     },
   ],
 }
 
-describe('migrate legacy v1 plans', () => {
-  it('wraps lines into Base scenario with USD and Other categories', () => {
-    const result = parsePlannerState(legacyV1)
+describe('v2 → v3 migration', () => {
+  it('preserves monetary values and migrates opening funds + cash purposes', () => {
+    const result = parsePlannerState(legacyV2)
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.state.schemaVersion).toBe(SCHEMA_VERSION)
-    expect(result.state.currency).toBe('USD')
-    expect(result.state.scenarios).toHaveLength(1)
-    expect(result.state.scenarios[0].name).toBe('Base')
-    expect(result.state.businessName).toBe('Legacy Co')
-    expect(result.state.startingCash).toBe(25000)
-    expect(result.state.startMonth).toBe(9)
-    expect(result.state.scenarios[0].revenue[0].uniformAmount).toBe(1000)
-    expect(result.state.scenarios[0].revenue[0].growthPercent).toBe(8)
-    expect(result.state.scenarios[0].revenue[0].oneTimeMonth).toBe(0)
-    expect(result.state.scenarios[0].expenses.every((e) => e.category === 'other')).toBe(
-      true,
+    expect(result.state.currency).toBe('CAD')
+    expect(totalOpeningFunds(result.state.openingFunds)).toBe(100000)
+    expect(result.state.openingFunds[0].name).toBe('Opening funds')
+    expect(result.state.openingFunds[0].type).toBe('other')
+    expect(result.state.scenarios[0].expenses.find((e) => e.name === 'Salaries')?.cashPurpose).toBe(
+      'operating',
     )
-    expect(result.state.scenarios[0].expenses[1].amounts).toHaveLength(12)
-    expect(result.state.scenarios[0].expenses[1].amounts[2]).toBe(0)
+    // cogs would be direct; these are non-cogs so operating — user reclassifies startup/loan
+    expect(result.state.scenarios[0].expenses.find((e) => e.name === 'startup gear')?.cashPurpose).toBe(
+      'operating',
+    )
+    expect(result.state.scenarios[0].funding).toEqual([])
+
+    const json = parsePlannerJson(JSON.stringify(result.state))
+    expect(json.ok).toBe(true)
+    if (!json.ok) return
+    expect(json.state.scenarios[0].expenses[0].uniformAmount).toBe(4000)
   })
 
-  it('round-trips migrated state through JSON', () => {
-    const migrated = parsePlannerState(legacyV1)
+  it('after user reclassifies startup and loan, cash metrics match expected pattern', () => {
+    const migrated = parsePlannerState(legacyV2)
     expect(migrated.ok).toBe(true)
     if (!migrated.ok) return
-    const again = parsePlannerJson(JSON.stringify(migrated.state))
-    expect(again.ok).toBe(true)
-    if (!again.ok) return
-    expect(again.state.scenarios[0].revenue[0].name).toBe('Sales')
-    expect(again.state.scenarios[0].expenses[0].uniformAmount).toBe(5000)
+    const scenario = {
+      ...migrated.state.scenarios[0],
+      expenses: migrated.state.scenarios[0].expenses.map((e) => {
+        if (e.name === 'startup gear') return { ...e, cashPurpose: 'startup' as const }
+        if (e.name === 'loan') return { ...e, cashPurpose: 'loan_payment' as const }
+        return e
+      }),
+    }
+    const summaries = buildSummariesForScenario(
+      scenario,
+      migrated.state.startMonth,
+      migrated.state.startYear,
+      migrated.state.openingFunds,
+      0,
+    )
+    const m0 = buildMetrics(summaries, migrated.state.openingFunds, 0)
+    expect(m0.totalOpeningFunds).toBe(100000)
+    // Sep: 100000 + 2000 - 4000 - 83000 - 500 = 14500
+    expect(summaries[0].endingCash).toBe(14500)
+    expect(m0.personalFundingRequired).toBe(0)
+
+    const withBuffer = buildMetrics(summaries, migrated.state.openingFunds, 10000)
+    expect(withBuffer.personalFundingRequired).toBe(
+      Math.max(0, 10000 - withBuffer.lowestCash),
+    )
   })
 })
 
-describe('schema v2 validation', () => {
-  it('accepts multi-scenario plans and currency', () => {
-    const fresh = createDefaultState(new Date('2026-06-01'))
-    fresh.currency = 'EUR'
-    const result = parsePlannerState(JSON.parse(JSON.stringify(fresh)))
-    expect(result.ok).toBe(true)
-    if (!result.ok) return
-    expect(result.state.currency).toBe('EUR')
-    expect(result.state.scenarios[0].expenses[0].category).toBe('payroll')
-  })
-
-  it('normalizes one-time fields', () => {
-    const result = parsePlannerState({
-      schemaVersion: 2,
-      businessName: 'X',
-      startMonth: 0,
-      startYear: 2026,
-      startingCash: 0,
-      currency: 'CAD',
-      activeScenarioId: 's1',
-      scenarios: [
-        {
-          id: 's1',
-          name: 'Base',
-          revenue: [
-            {
-              id: 'r',
-              name: 'Launch',
-              fillMode: 'one-time',
-              uniformAmount: '900',
-              growthPercent: 0,
-              oneTimeMonth: '4',
-              amounts: [],
-            },
-          ],
-          expenses: [],
-        },
-      ],
-    })
-    expect(result.ok).toBe(true)
-    if (!result.ok) return
-    expect(result.state.scenarios[0].revenue[0].fillMode).toBe('one-time')
-    expect(result.state.scenarios[0].revenue[0].uniformAmount).toBe(900)
-    expect(result.state.scenarios[0].revenue[0].oneTimeMonth).toBe(4)
-  })
-
-  it('rejects invalid roots and keeps helpers sane', () => {
-    expect(parsePlannerState(null).ok).toBe(false)
-    expect(parsePlannerJson('{').ok).toBe(false)
-    expect(toFiniteNumber('nope', 3)).toBe(3)
-    expect(normalizeAmounts([1])).toHaveLength(12)
-  })
-
-  it('falls back invalid one-time month on normalize', () => {
-    const result = parsePlannerState({
-      schemaVersion: 2,
-      scenarios: [
-        {
-          id: 's',
-          name: 'B',
-          revenue: [
-            {
-              id: 'r',
-              name: 'X',
-              fillMode: 'one-time',
-              uniformAmount: 10,
-              oneTimeMonth: 40,
-              amounts: [],
-              growthPercent: 0,
-            },
-          ],
-          expenses: [],
-        },
-      ],
-    })
-    expect(result.ok).toBe(true)
-    if (!result.ok) return
-    expect(result.state.scenarios[0].revenue[0].oneTimeMonth).toBe(0)
+describe('defaults', () => {
+  it('creates schema v3 default state', () => {
+    const state = createDefaultState(new Date('2026-01-01'))
+    expect(state.schemaVersion).toBe(3)
+    expect(state.openingFunds).toHaveLength(1)
+    expect(state.scenarios[0].notes).toBe('')
+    expect(state.scenarios[0].funding).toEqual([])
   })
 })

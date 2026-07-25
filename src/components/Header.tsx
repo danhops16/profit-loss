@@ -1,5 +1,7 @@
-import type { CurrencyCode, PlannerState } from '../types'
-import { CURRENCY_CODES, MONTHS } from '../types'
+import type { CurrencyCode, OpeningFundSource, OpeningFundType, PlannerState } from '../types'
+import { CURRENCY_CODES, MONTHS, OPENING_FUND_TYPES, OPENING_FUND_TYPE_LABELS } from '../types'
+import { createOpeningFund, totalOpeningFunds } from '../utils/defaults'
+import { formatMoney } from '../utils/formatMoney'
 
 interface HeaderProps {
   state: PlannerState
@@ -7,23 +9,37 @@ interface HeaderProps {
     patch: Partial<
       Pick<
         PlannerState,
-        'businessName' | 'startMonth' | 'startYear' | 'startingCash' | 'currency'
+        'businessName' | 'startMonth' | 'startYear' | 'currency' | 'cashBuffer'
       >
     >,
   ) => void
+  onOpeningFundsChange: (funds: OpeningFundSource[]) => void
 }
 
-export function Header({ state, onUpdate }: HeaderProps) {
+export function Header({ state, onUpdate, onOpeningFundsChange }: HeaderProps) {
   const years = Array.from({ length: 5 }, (_, i) => state.startYear - 1 + i)
+  const openingTotal = totalOpeningFunds(state.openingFunds)
+
+  const updateFund = (id: string, patch: Partial<OpeningFundSource>) => {
+    onOpeningFundsChange(
+      state.openingFunds.map((f) => (f.id === id ? { ...f, ...patch } : f)),
+    )
+  }
 
   return (
     <header className="header">
       <div>
-        <h1>Year-one profit &amp; loss</h1>
+        <h1>Year-One Startup Cash Planner</h1>
         <p className="subtitle">
-          Forecast revenue, costs, and cash for your first 12 months
+          See how long your opening money lasts, what personal funding you may need, and
+          whether operations can cover the bills.
+        </p>
+        <p className="disclaimer">
+          Planning estimate only — not accounting, tax, inventory, or financial advice.
+          Ending cash is cash remaining in the account, not “loan remaining.”
         </p>
       </div>
+
       <div className="setup-grid">
         <label className="field">
           <span>Business name</span>
@@ -31,7 +47,6 @@ export function Header({ state, onUpdate }: HeaderProps) {
             type="text"
             value={state.businessName}
             onChange={(e) => onUpdate({ businessName: e.target.value })}
-            placeholder="Acme Inc."
           />
         </label>
         <label className="field">
@@ -61,23 +76,6 @@ export function Header({ state, onUpdate }: HeaderProps) {
           </select>
         </label>
         <label className="field">
-          <span>Starting cash</span>
-          <input
-            type="number"
-            step={100}
-            value={state.startingCash === 0 ? 0 : state.startingCash || ''}
-            onChange={(e) => {
-              const raw = e.target.value
-              if (raw === '' || raw === '-') {
-                onUpdate({ startingCash: raw === '-' ? state.startingCash : 0 })
-                return
-              }
-              const n = Number(raw)
-              if (Number.isFinite(n)) onUpdate({ startingCash: n })
-            }}
-          />
-        </label>
-        <label className="field">
           <span>Display currency</span>
           <select
             value={state.currency}
@@ -90,10 +88,100 @@ export function Header({ state, onUpdate }: HeaderProps) {
             ))}
           </select>
         </label>
+        <label className="field">
+          <span>Desired minimum cash buffer</span>
+          <input
+            type="number"
+            step={100}
+            value={state.cashBuffer}
+            onChange={(e) => {
+              const n = Number(e.target.value)
+              if (Number.isFinite(n)) onUpdate({ cashBuffer: n })
+            }}
+          />
+        </label>
       </div>
       <p className="currency-note">
         Currency changes formatting only — amounts are not converted.
       </p>
+
+      <section className="opening-funds" aria-label="Opening funds">
+        <div className="section-head">
+          <h2>Opening funds</h2>
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={() =>
+              onOpeningFundsChange([
+                ...state.openingFunds,
+                createOpeningFund('Additional opening funds', 'owner', 0),
+              ])
+            }
+          >
+            Add source
+          </button>
+        </div>
+        <p className="cash-timing-note">
+          Cash available at the start of forecast month one. Do not also enter money already
+          spent before that date as a month-one cost.
+        </p>
+        <div className="opening-funds__list">
+          {state.openingFunds.map((fund) => (
+            <div key={fund.id} className="opening-fund-row">
+              <label className="field">
+                <span>Name</span>
+                <input
+                  type="text"
+                  value={fund.name}
+                  onChange={(e) => updateFund(fund.id, { name: e.target.value })}
+                />
+              </label>
+              <label className="field">
+                <span>Type</span>
+                <select
+                  value={fund.type}
+                  onChange={(e) =>
+                    updateFund(fund.id, { type: e.target.value as OpeningFundType })
+                  }
+                >
+                  {OPENING_FUND_TYPES.map((t) => (
+                    <option key={t} value={t}>
+                      {OPENING_FUND_TYPE_LABELS[t]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Amount</span>
+                <input
+                  type="number"
+                  step={100}
+                  value={fund.amount}
+                  onChange={(e) => {
+                    const n = Number(e.target.value)
+                    if (Number.isFinite(n)) updateFund(fund.id, { amount: n })
+                  }}
+                />
+              </label>
+              {state.openingFunds.length > 1 && (
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm btn--danger"
+                  onClick={() =>
+                    onOpeningFundsChange(state.openingFunds.filter((f) => f.id !== fund.id))
+                  }
+                >
+                  Remove
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+        <p className="opening-total">
+          Total opening cash:{' '}
+          <strong>{formatMoney(openingTotal, state.currency)}</strong>
+        </p>
+      </section>
     </header>
   )
 }

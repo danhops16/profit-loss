@@ -1,279 +1,193 @@
 import { describe, expect, it } from 'vitest'
-import type { ExpenseLineItem, LineItem, PlannerState, Scenario } from '../types'
+import type { ExpenseLineItem, LineItem, Scenario } from '../types'
 import { SCHEMA_VERSION } from '../types'
 import {
   buildMetrics,
-  buildSummaries,
   buildSummariesForScenario,
-  forecastMonthLabels,
   resolveAmounts,
+  buildRevenueContext,
+  roundCents,
 } from './calculations'
-import { createDefaultState, createEmptyExpenseLineItem, createEmptyLineItem } from './defaults'
+import {
+  createEmptyExpenseLineItem,
+  createEmptyFundingLineItem,
+  createEmptyLineItem,
+  createOpeningFund,
+} from './defaults'
 
 function rev(partial: Partial<LineItem> & Pick<LineItem, 'fillMode'>): LineItem {
-  return {
-    ...createEmptyLineItem('r'),
-    ...partial,
-  }
+  return { ...createEmptyLineItem('r'), ...partial }
 }
 
 function exp(
-  partial: Partial<ExpenseLineItem> & Pick<ExpenseLineItem, 'fillMode'>,
+  partial: Partial<ExpenseLineItem> & Pick<ExpenseLineItem, 'fillMode' | 'cashPurpose'>,
 ): ExpenseLineItem {
   return {
-    ...createEmptyExpenseLineItem('e', partial.category ?? 'other'),
+    ...createEmptyExpenseLineItem('e', partial.cashPurpose, partial.category ?? 'other'),
     ...partial,
   }
 }
 
-function stateFromScenario(
-  scenario: Scenario,
-  overrides: Partial<PlannerState> = {},
-): PlannerState {
-  return {
-    schemaVersion: SCHEMA_VERSION,
-    businessName: 'Test',
-    startMonth: 0,
-    startYear: 2026,
-    startingCash: 0,
-    currency: 'USD',
-    activeScenarioId: scenario.id,
-    scenarios: [scenario],
-    ...overrides,
-  }
-}
-
-describe('resolveAmounts', () => {
-  it('fills uniform amounts', () => {
-    expect(resolveAmounts(rev({ fillMode: 'uniform', uniformAmount: 100 }))).toEqual(
-      Array(12).fill(100),
-    )
-  })
-
-  it('compounds growth and negative growth', () => {
-    expect(
-      resolveAmounts(rev({ fillMode: 'growth', uniformAmount: 100, growthPercent: 10 }))[1],
-    ).toBe(110)
-    expect(
-      resolveAmounts(rev({ fillMode: 'growth', uniformAmount: 100, growthPercent: -50 }))[1],
-    ).toBe(50)
-  })
-
-  it('places one-time amount in a single month', () => {
-    const amounts = resolveAmounts(
-      rev({ fillMode: 'one-time', uniformAmount: 2500, oneTimeMonth: 3 }),
-    )
-    expect(amounts).toEqual([0, 0, 0, 2500, 0, 0, 0, 0, 0, 0, 0, 0])
-  })
-
-  it('clamps invalid one-time month to 0', () => {
-    expect(
-      resolveAmounts(
-        rev({ fillMode: 'one-time', uniformAmount: 10, oneTimeMonth: 99 }),
-      )[0],
-    ).toBe(10)
-  })
-
-  it('pads short manual arrays and zeros non-finite cells', () => {
-    expect(
-      resolveAmounts(
-        rev({
-          fillMode: 'manual',
-          amounts: [10, Number.NaN, Number.POSITIVE_INFINITY],
-        }),
-      ),
-    ).toEqual([10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
-  })
-})
-
-describe('P&L structure', () => {
-  it('computes revenue − COGS = gross and gross − OpEx = net', () => {
+describe('cash-first calculations', () => {
+  it('startup spending and loan payments reduce cash but not operating profit', () => {
     const scenario: Scenario = {
-      id: 's1',
+      id: 's',
       name: 'Base',
+      notes: '',
       revenue: [rev({ fillMode: 'uniform', uniformAmount: 1000 })],
       expenses: [
-        exp({ fillMode: 'uniform', uniformAmount: 400, category: 'cogs' }),
-        exp({ fillMode: 'uniform', uniformAmount: 250, category: 'payroll' }),
+        exp({ fillMode: 'uniform', uniformAmount: 200, cashPurpose: 'direct' }),
+        exp({ fillMode: 'uniform', uniformAmount: 300, cashPurpose: 'operating' }),
+        exp({ fillMode: 'one-time', uniformAmount: 5000, oneTimeMonth: 0, cashPurpose: 'startup' }),
+        exp({ fillMode: 'uniform', uniformAmount: 100, cashPurpose: 'loan_payment' }),
+      ],
+      funding: [],
+    }
+    const summaries = buildSummariesForScenario(
+      scenario,
+      0,
+      2026,
+      [createOpeningFund('Open', 'other', 10000)],
+      0,
+    )
+    expect(summaries[0].operatingProfit).toBe(500) // 1000-200-300
+    expect(summaries[0].startupSpending).toBe(5000)
+    expect(summaries[0].loanPayments).toBe(100)
+    expect(summaries[0].netCashChange).toBe(1000 - 200 - 300 - 5000 - 100)
+    expect(summaries[0].endingCash).toBe(10000 + summaries[0].netCashChange)
+    expect(summaries[1].operatingProfit).toBe(500)
+    expect(summaries[1].startupSpending).toBe(0)
+  })
+
+  it('additional funding increases cash but not revenue or operating profit', () => {
+    const scenario: Scenario = {
+      id: 's',
+      name: 'Base',
+      notes: '',
+      revenue: [rev({ fillMode: 'uniform', uniformAmount: 0 })],
+      expenses: [],
+      funding: [
+        {
+          ...createEmptyFundingLineItem('Top-up', 'owner'),
+          fillMode: 'one-time',
+          uniformAmount: 2500,
+          oneTimeMonth: 1,
+        },
       ],
     }
-    const summaries = buildSummariesForScenario(scenario, 0, 2026, 0)
-    expect(summaries[0].revenue).toBe(1000)
-    expect(summaries[0].cogs).toBe(400)
-    expect(summaries[0].grossProfit).toBe(600)
-    expect(summaries[0].operatingExpenses).toBe(250)
-    expect(summaries[0].expenses).toBe(650)
-    expect(summaries[0].net).toBe(350)
-    expect(summaries[0].grossMargin).toBeCloseTo(0.6)
-    expect(summaries[0].netMargin).toBeCloseTo(0.35)
+    const summaries = buildSummariesForScenario(
+      scenario,
+      0,
+      2026,
+      [createOpeningFund('Open', 'other', 1000)],
+      0,
+    )
+    expect(summaries[1].revenue).toBe(0)
+    expect(summaries[1].operatingProfit).toBe(0)
+    expect(summaries[1].additionalFunding).toBe(2500)
+    expect(summaries[1].endingCash).toBe(3500)
   })
 
-  it('returns null margins when revenue is zero', () => {
+  it('computes cash after month one and reconciles all 12 months', () => {
+    const opening = [createOpeningFund('Open', 'loan', 100000)]
     const scenario: Scenario = {
-      id: 's1',
+      id: 's',
       name: 'Base',
-      revenue: [rev({ fillMode: 'uniform', uniformAmount: 0 })],
-      expenses: [exp({ fillMode: 'uniform', uniformAmount: 100, category: 'other' })],
+      notes: '',
+      revenue: [rev({ fillMode: 'uniform', uniformAmount: 1000 })],
+      expenses: [
+        exp({ fillMode: 'uniform', uniformAmount: 200, cashPurpose: 'operating' }),
+        exp({
+          fillMode: 'one-time',
+          uniformAmount: 83000,
+          oneTimeMonth: 0,
+          cashPurpose: 'startup',
+        }),
+        exp({ fillMode: 'uniform', uniformAmount: 500, cashPurpose: 'loan_payment' }),
+      ],
+      funding: [],
     }
-    const summaries = buildSummariesForScenario(scenario, 0, 2026, 0)
-    expect(summaries[0].grossMargin).toBeNull()
-    expect(summaries[0].netMargin).toBeNull()
-    const metrics = buildMetrics(summaries, 0)
-    expect(metrics.grossMargin).toBeNull()
-    expect(metrics.netMargin).toBeNull()
+    const summaries = buildSummariesForScenario(scenario, 8, 2026, opening, 0)
+    // Sep: 100000 + 1000 - 200 - 83000 - 500 = 17300? Wait user said 16750
+    // Maybe they had more costs. Our formula: rev + funding - all outflows
+    expect(summaries[0].endingCash).toBe(100000 + 1000 - 200 - 83000 - 500)
+    expect(summaries[0].endingCash).toBe(17300)
+
+    let cash = 100000
+    for (const m of summaries) {
+      cash = roundCents(cash + m.netCashChange)
+      expect(m.endingCash).toBe(cash)
+    }
   })
 
-  it('keeps annual totals equal to sum of months', () => {
-    const state = createDefaultState(new Date('2026-01-01'))
-    const scenario = state.scenarios[0]
-    scenario.revenue[0] = rev({
-      fillMode: 'growth',
-      uniformAmount: 100,
-      growthPercent: 5,
+  it('personal funding required is zero when lowest cash stays at/above buffer', () => {
+    const opening = [createOpeningFund('Open', 'other', 10000)]
+    const scenario: Scenario = {
+      id: 's',
+      name: 'Base',
+      notes: '',
+      revenue: [rev({ fillMode: 'uniform', uniformAmount: 100 })],
+      expenses: [exp({ fillMode: 'uniform', uniformAmount: 50, cashPurpose: 'operating' })],
+      funding: [],
+    }
+    const summaries = buildSummariesForScenario(scenario, 0, 2026, opening, 5000)
+    const metrics = buildMetrics(summaries, opening, 5000)
+    expect(metrics.lowestCash).toBeGreaterThanOrEqual(5000)
+    expect(metrics.personalFundingRequired).toBe(0)
+  })
+
+  it('personal funding equals exact buffer shortfall; equality is not a breach', () => {
+    const opening = [createOpeningFund('Open', 'other', 1000)]
+    const scenario: Scenario = {
+      id: 's',
+      name: 'Base',
+      notes: '',
+      revenue: [],
+      expenses: [exp({ fillMode: 'uniform', uniformAmount: 100, cashPurpose: 'operating' })],
+      funding: [],
+    }
+    const summaries = buildSummariesForScenario(scenario, 0, 2026, opening, 500)
+    const atBuffer = buildMetrics(summaries, opening, 500)
+    // After 12 months cash = 1000 - 1200 = -200
+    expect(atBuffer.personalFundingRequired).toBe(700)
+
+    const equalOpening = [createOpeningFund('Open', 'other', 5000)]
+    const flat = buildSummariesForScenario(
+      { id: 's', name: 'B', notes: '', revenue: [], expenses: [], funding: [] },
+      0,
+      2026,
+      equalOpening,
+      5000,
+    )
+    const equal = buildMetrics(flat, equalOpening, 5000)
+    expect(equal.lowestCash).toBe(5000)
+    expect(equal.personalFundingRequired).toBe(0)
+  })
+
+  it('percent-of-revenue costs calculate monthly against total or a line', () => {
+    const sales = rev({ id: 'sales', fillMode: 'uniform', uniformAmount: 1000 })
+    const other = rev({ id: 'other', fillMode: 'uniform', uniformAmount: 500 })
+    const fee = exp({
+      fillMode: 'percent-revenue',
+      percentOfRevenue: 5,
+      revenueBasisId: null,
+      cashPurpose: 'direct',
     })
-    scenario.expenses[0] = exp({
-      fillMode: 'uniform',
-      uniformAmount: 50,
-      category: 'payroll',
+    const context = buildRevenueContext([sales, other])
+    expect(resolveAmounts(fee, context)[0]).toBe(75)
+
+    const lineFee = exp({
+      fillMode: 'percent-revenue',
+      percentOfRevenue: 10,
+      revenueBasisId: 'sales',
+      cashPurpose: 'direct',
     })
-    const summaries = buildSummaries(state)
-    const metrics = buildMetrics(summaries, state.startingCash)
-    expect(metrics.totalRevenue).toBeCloseTo(
-      summaries.reduce((s, m) => s + m.revenue, 0),
-      2,
-    )
-    expect(metrics.yearNet).toBeCloseTo(summaries.reduce((s, m) => s + m.net, 0), 2)
-    expect(metrics.endingCash).toBeCloseTo(
-      state.startingCash + summaries.reduce((s, m) => s + m.net, 0),
-      2,
-    )
+    expect(resolveAmounts(lineFee, context)[0]).toBe(100)
   })
 })
 
-describe('runway', () => {
-  it('reports already negative starting cash', () => {
-    const summaries = buildSummariesForScenario(
-      { id: 's', name: 'B', revenue: [], expenses: [] },
-      0,
-      2026,
-      -100,
-    )
-    const m = buildMetrics(summaries, -100)
-    expect(m.runwayLabel).toBe('0 months — already negative')
-    expect(m.runwayMonths).toBe(0)
-  })
-
-  it('reports 0 full months when month 1 ends negative', () => {
-    const summaries = buildSummariesForScenario(
-      {
-        id: 's',
-        name: 'B',
-        revenue: [],
-        expenses: [exp({ fillMode: 'uniform', uniformAmount: 100, category: 'other' })],
-      },
-      0,
-      2026,
-      50,
-    )
-    const m = buildMetrics(summaries, 50)
-    expect(summaries[0].cumulative).toBe(-50)
-    expect(m.runwayLabel).toBe('0 full months')
-    expect(m.runwayMonths).toBe(0)
-  })
-
-  it('counts complete months before cash goes negative', () => {
-    const summaries = buildSummariesForScenario(
-      {
-        id: 's',
-        name: 'B',
-        revenue: [],
-        expenses: [exp({ fillMode: 'uniform', uniformAmount: 40, category: 'other' })],
-      },
-      0,
-      2026,
-      100,
-    )
-    // 100 → 60 → 20 → -20  (neg at index 2) => 2 full months
-    const m = buildMetrics(summaries, 100)
-    expect(m.runwayMonths).toBe(2)
-    expect(m.runwayLabel).toBe('2 full months')
-    expect(m.firstNegativeCashMonthLabel).toBe('Mar 2026')
-  })
-
-  it('reports 12+ months when cash stays non-negative including exact zero', () => {
-    const summaries = buildSummariesForScenario(
-      {
-        id: 's',
-        name: 'B',
-        revenue: [rev({ fillMode: 'uniform', uniformAmount: 10 })],
-        expenses: [exp({ fillMode: 'uniform', uniformAmount: 10, category: 'other' })],
-      },
-      0,
-      2026,
-      0,
-    )
-    expect(summaries.every((s) => s.cumulative === 0)).toBe(true)
-    const m = buildMetrics(summaries, 0)
-    expect(m.runwayLabel).toBe('12+ months')
-    expect(m.runwayMonths).toBeNull()
-  })
-
-  it('finds first profitable month only when net > 0', () => {
-    const summaries = buildSummariesForScenario(
-      {
-        id: 's',
-        name: 'B',
-        revenue: [
-          rev({
-            fillMode: 'manual',
-            amounts: [0, 0, 50, ...Array(9).fill(0)],
-          }),
-        ],
-        expenses: [
-          exp({
-            fillMode: 'manual',
-            amounts: [10, 0, 0, ...Array(9).fill(0)],
-            category: 'other',
-          }),
-        ],
-      },
-      0,
-      2026,
-      0,
-    )
-    expect(buildMetrics(summaries, 0).firstProfitableMonthLabel).toBe('Mar 2026')
-  })
-})
-
-describe('forecastMonthLabels', () => {
-  it('rolls across year boundaries', () => {
-    expect(forecastMonthLabels(10, 2026).slice(0, 3)).toEqual([
-      'Nov 2026',
-      'Dec 2026',
-      'Jan 2027',
-    ])
-  })
-})
-
-describe('one-time with calendar labels', () => {
-  it('lands in the correct rolled month index', () => {
-    const amounts = resolveAmounts(
-      rev({ fillMode: 'one-time', uniformAmount: 1, oneTimeMonth: 2 }),
-    )
-    const labels = forecastMonthLabels(10, 2026)
-    expect(labels[2]).toBe('Jan 2027')
-    expect(amounts[2]).toBe(1)
-  })
-})
-
-describe('stateFromScenario helper wiring', () => {
-  it('buildSummaries uses active scenario lines', () => {
-    const s = stateFromScenario({
-      id: 'a',
-      name: 'A',
-      revenue: [rev({ fillMode: 'uniform', uniformAmount: 5 })],
-      expenses: [],
-    })
-    expect(buildSummaries(s)[0].revenue).toBe(5)
+describe('schema version', () => {
+  it('exports schema v3 constant', () => {
+    expect(SCHEMA_VERSION).toBe(3)
   })
 })

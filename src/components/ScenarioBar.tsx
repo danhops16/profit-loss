@@ -8,6 +8,7 @@ interface ScenarioBarProps {
   onDuplicate: () => void
   onRename: (name: string) => void
   onDelete: (id: string) => void
+  onNotesChange: (notes: string) => void
   statusMessage?: string | null
 }
 
@@ -19,6 +20,7 @@ export function ScenarioBar({
   onDuplicate,
   onRename,
   onDelete,
+  onNotesChange,
   statusMessage,
 }: ScenarioBarProps) {
   const active = scenarios.find((s) => s.id === activeScenarioId) ?? scenarios[0]
@@ -54,8 +56,8 @@ export function ScenarioBar({
           <button type="button" className="btn btn--ghost btn--sm" onClick={onCreate}>
             New blank
           </button>
-          <button type="button" className="btn btn--ghost btn--sm" onClick={onDuplicate}>
-            Duplicate
+          <button type="button" className="btn btn--primary btn--sm" onClick={onDuplicate}>
+            Duplicate Base to create a Downside or Upside scenario
           </button>
           <button
             type="button"
@@ -63,11 +65,7 @@ export function ScenarioBar({
             disabled={scenarios.length <= 1}
             onClick={() => {
               if (!active) return
-              if (
-                confirm(
-                  `Delete scenario “${active.name}”? This cannot be undone.`,
-                )
-              ) {
+              if (confirm(`Delete scenario “${active.name}”? This cannot be undone.`)) {
                 onDelete(active.id)
               }
             }}
@@ -76,6 +74,16 @@ export function ScenarioBar({
           </button>
         </div>
       </div>
+      <label className="field scenario-notes">
+        <span>Assumptions / notes</span>
+        <textarea
+          key={active?.id}
+          defaultValue={active?.notes ?? ''}
+          onBlur={(e) => onNotesChange(e.target.value)}
+          rows={2}
+          placeholder="e.g. Revenue starts two months later; startup costs 10% higher"
+        />
+      </label>
       {statusMessage ? (
         <p className="export-status export-status--error" role="status" aria-live="polite">
           {statusMessage}

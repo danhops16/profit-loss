@@ -1,10 +1,10 @@
-# Year-one P&L — codebase audit
+# Year-One Startup Cash Planner — codebase audit
 
-**Audited:** July 2026 (forecasting-tool release)  
+**Audited:** July 2026 (schema v3 cash-first release)  
 **Live site:** https://danhops16.github.io/profit-loss/  
 **Repo:** https://github.com/danhops16/profit-loss
 
-Practical first-year profit-and-loss forecasting: multi-scenario plans, COGS / gross profit, one-time items, currency display, CSV export, and validated localStorage migration.
+Cash-first startup forecasting: opening funds, operating vs cash outflows, personal funding required, multi-scenario comparison, and a compact tabbed editor.
 
 ---
 
@@ -12,172 +12,136 @@ Practical first-year profit-and-loss forecasting: multi-scenario plans, COGS / g
 
 | Metric | Value |
 |--------|--------|
-| Schema version | **2** (multi-scenario) |
+| Schema version | **3** |
 | Storage key | `profit-loss-planner-v1` (unchanged) |
-| Runtime deps | react, react-dom, recharts |
-| Tests | Vitest (`npm test`) |
-| Deploy | GitHub Actions → GitHub Pages |
+| Product framing | Planning estimate — not tax/accounting |
+| Tests | Vitest |
+| Deploy | GitHub Actions → Pages |
 
-### Stack
+### What it answers
 
-| Layer | Choice | Notes |
-|-------|--------|--------|
-| Build | Vite 8 | `VITE_BASE_PATH` for Pages; charts lazy-loaded |
-| UI | React 19 | Single page, no router |
-| Domain | Pure TS utils | Calculations, validation, scenarios, CSV, money |
-| Charts | Recharts (async chunk) | Not in the initial JS bundle |
-
-### What’s solid
-
-- Schema v2 with backward-compatible migration from unversioned v1 plans
-- Expense categories including COGS → gross profit / OpEx / net
-- One-time fill mode (amount + forecast month)
-- Named scenarios (create / duplicate / rename / switch / delete)
-- Shared `buildMetrics` (margins, numeric runway, cash milestones)
-- Currency formatting (USD/CAD/EUR/GBP/AUD) — display only, no FX conversion
-- JSON + CSV export; validated import with inline errors
-- Sticky summary while editing; calendar month labels; a11y basics
+1. Cash after month one  
+2. Lowest cash balance (and month)  
+3. When cash may run out (runway)  
+4. Personal funding required vs a desired buffer  
+5. Whether operations can cover ongoing bills  
+6. Base / Downside / Upside comparison  
 
 ---
 
 ## Architecture
 
 ```
-User edits
-  → usePlanner (immutable scenario updates + localStorage)
-  → buildSummaries / buildMetrics / compareScenarios
-  → Dashboard, sticky bar, charts, table, comparison
-
-Import:
-  JSON → parsePlannerState (migrate if needed) → setState | keep plan + error
+User edits → usePlanner → buildSummaries / buildMetrics / compareScenarios → UI
+Import JSON → parsePlannerState (v1/v2/v3) → setState | keep plan + error
 ```
 
-### Domain modules
+### Domain
 
 | File | Role |
 |------|------|
-| `src/types.ts` | Schema v2 types, categories, currencies |
-| `src/utils/defaults.ts` | Fresh factories + `getActiveScenario` |
-| `src/utils/validatePlannerState.ts` | Untrusted JSON → normalized v2 state |
-| `src/utils/calculations.ts` | Amounts, P&L summaries, metrics, compare |
-| `src/utils/scenarios.ts` | Pure scenario mutations |
-| `src/utils/formatMoney.ts` | `Intl` money + margin (`—` when N/A) |
-| `src/utils/csvExport.ts` | Active-scenario CSV builder |
-| `src/hooks/usePlanner.ts` | React state + persistence |
+| `types.ts` | Schema v3 types |
+| `defaults.ts` | Factories, opening funds total |
+| `validatePlannerState.ts` | Untrusted JSON + migration |
+| `calculations.ts` | Amounts, cash/ops summaries, metrics |
+| `scenarios.ts` | Scenario mutations |
+| `formatMoney.ts` | Currency + margin formatting |
+| `csvExport.ts` | Active-scenario CSV |
 
-### UI modules
+### UI
 
 | Component | Role |
 |-----------|------|
-| `Header` | Shared business setup + currency |
-| `ScenarioBar` | Scenario CRUD / switch |
-| `StickySummary` | Compact live KPIs |
-| `Dashboard` | Full year-one snapshot |
-| `LineItemSection` | Revenue/expense editors |
-| `Charts` / `ChartsInner` | Lazy Recharts visuals |
-| `MonthlyTable` | Structured monthly P&L |
-| `ScenarioCompare` | Side-by-side scenario KPIs |
-| `ExportBar` | JSON / CSV / import / reset |
+| `Header` | Business setup, currency, buffer, opening funds |
+| `PlanActions` | Export/import/reset near top |
+| `ScenarioBar` | Scenarios + notes |
+| `StickySummary` | Cash-after-m1, lowest, funding needed, ending |
+| `Dashboard` | Cash group (6 priority) + ops group |
+| `LineWorkspace` | Full-width tabs; collapsed rows |
+| `Charts` / `ChartsInner` | Operating vs cash views (lazy) |
+| `MonthlyCashTable` | Monthly cash plan |
+| `ScenarioCompare` | Hidden unless 2+ scenarios |
 
 ---
 
-## Data model (schema v2)
+## Schema v3 model
 
-### `PlannerState` (shared across scenarios)
+### Shared `PlannerState`
 
-| Field | Meaning |
-|-------|---------|
-| `schemaVersion` | `2` |
-| `businessName` | Display name |
-| `startMonth` / `startYear` | Forecast window start |
-| `startingCash` | Opening cash (may be negative) |
-| `currency` | Display currency code |
-| `activeScenarioId` | Selected scenario |
-| `scenarios[]` | Independent forecasts |
+- `schemaVersion: 3`
+- `businessName`, `startMonth`, `startYear`, `currency`
+- `cashBuffer` — desired minimum ending cash
+- `openingFunds[]` — loan / owner / grant / other sources
+- `activeScenarioId`, `scenarios[]`
 
 ### `Scenario`
 
-| Field | Meaning |
-|-------|---------|
-| `id` / `name` | Identity |
-| `revenue[]` | `LineItem`s |
-| `expenses[]` | `ExpenseLineItem`s (with `category`) |
+- `notes` — assumptions text  
+- `revenue[]`, `expenses[]`, `funding[]` (planned cash inflows)
 
-### `LineItem` fill modes
+### Expense fields
 
-`uniform` | `growth` | `one-time` | `manual`
-
-One-time uses `uniformAmount` + `oneTimeMonth` (0–11). Other mode fields are preserved when switching.
-
-### Expense categories
-
-`cogs` · `payroll` · `marketing` · `facilities` · `software` · `professional` · `taxes` · `other`
+- `cashPurpose`: direct | operating | startup | loan_payment | other_outflow  
+- `category`: detail tag (payroll, facilities, …)  
+- Fill modes: uniform | growth | one-time | percent-revenue | manual  
 
 ---
 
-## Financial definitions
+## Cash formulas
 
-| Concept | Definition |
-|---------|------------|
-| **COGS** | Expense lines with `category === 'cogs'` |
-| **Gross profit** | Revenue − COGS |
-| **Operating expenses** | All non-COGS expenses |
-| **Total expenses** | COGS + OpEx |
-| **Net profit** | Gross profit − OpEx (= Revenue − total expenses) |
-| **Gross / net margin** | Part ÷ revenue; **`—`** when revenue is 0 |
-| **Ending cash** | Starting cash + cumulative monthly net |
-| **Cash timing** | Assumed paid in the same forecast month (noted in UI) |
-| **First profitable month** | First month with **net > 0** |
-| **Average monthly loss** | Mean \|net\| over loss months (not labeled “burn”) |
-| **Runway** | See below |
+Per month:
 
-### Runway
+- Gross contribution = revenue − direct costs  
+- Operating profit = revenue − direct − ongoing operating costs  
+- Total outflows = direct + operating + startup + loan payments + other outflows  
+- Net cash change = revenue + additional funding − total outflows  
+- Ending cash = prior ending cash + net cash change  
 
-| Situation | Label |
-|-----------|--------|
-| Starting cash &lt; 0 | `0 months — already negative` |
-| Month 1 ending cash &lt; 0 | `0 full months` |
-| First negative ending cash at index `i` | `i full month(s)` |
-| Never negative in year 1 | `12+ months` |
-| Ending cash exactly 0 | Still non-negative (runway continues) |
+Startup spending and loan payments **reduce cash** but **do not** reduce operating profit.  
+Additional funding **increases cash** but **is not** revenue.
+
+### Personal funding required
+
+`max(0, desired buffer − lowest projected ending cash)`  
+
+Exact equality with the buffer is **not** a shortfall.
 
 ---
 
-## Migration strategy
+## Migration
 
-**Storage key stays** `profit-loss-planner-v1`.
-
-| Incoming shape | Behavior |
-|----------------|----------|
-| Unversioned / no `scenarios` (v1) | Wrap `revenue`/`expenses` into scenario **Base**; `currency: USD`; expense `category: other`; add `oneTimeMonth: 0`; set `schemaVersion: 2` |
-| `schemaVersion: 2` / has `scenarios` | Normalize in place |
-| Invalid JSON / shape | Load → fresh defaults; Import → **keep current plan** + inline error |
-
-Preserved on migrate: business name, dates, starting cash, line names/IDs, fill modes, amounts, growth rates, totals (via same math).
-
----
-
-## Suggested next backlog
-
-| Idea | Why |
+| From | To |
 |------|-----|
-| Numeric runway tooltip with month of cash-out | Extra clarity |
-| Print / light stylesheet | Offline sharing |
-| Optional scenario notes | Document assumptions |
-| Deeper component tests for import status | UI regression guard |
+| v1 flat plan | Base scenario + opening funds from `startingCash` |
+| v2 scenarios | Keep scenarios; `startingCash` → one source named **Opening funds** (type `other`); COGS → direct; other expenses → operating; `funding: []`; `notes: ''`; `cashBuffer: 0` |
 
-### Still out of scope (intentional)
-
-Auth, backend, routing, tax engines, AR/AP timing, inventory, multi-year, FX conversion, component libraries.
+Values, IDs, fill modes, and currency are preserved. Startup/loan reclassification is left to the user.
 
 ---
 
-## Local commands
+## UI notes
+
+- Wider desktop container (~1360px)  
+- Collapsed line rows with Edit / Duplicate / Remove  
+- New lines open automatically; Collapse all available  
+- `12-mo total` instead of `/yr`  
+- Empty scenario comparison hidden until 2+ scenarios  
+
+---
+
+## Remaining limitations
+
+- No FX conversion, tax engines, AR/AP timing, inventory, multi-year, auth, or backend  
+- Chart currency follows selection; some compact axis labels use `Intl` compact notation  
+- Live GitHub Pages updates only after merge to `main`  
+
+---
+
+## Commands
 
 ```bash
-npm run dev
 npm test
 npm run lint
 npm run build
-VITE_BASE_PATH=/profit-loss/ npm run build   # Pages-shaped bundle
+VITE_BASE_PATH=/profit-loss/ npm run build
 ```

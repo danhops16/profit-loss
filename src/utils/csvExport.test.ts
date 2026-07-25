@@ -1,65 +1,45 @@
 import { describe, expect, it } from 'vitest'
-import type { Scenario } from '../types'
 import { SCHEMA_VERSION } from '../types'
 import { buildActiveScenarioCsv, csvFilename } from './csvExport'
-import { createEmptyExpenseLineItem, createEmptyLineItem } from './defaults'
+import {
+  createEmptyExpenseLineItem,
+  createEmptyLineItem,
+  createOpeningFund,
+} from './defaults'
 
 describe('csvExport', () => {
-  it('escapes commas, quotes, and newlines in headers/cells', () => {
-    const scenario: Scenario = {
+  it('escapes values and includes cash columns', () => {
+    const scenario = {
       id: 's',
       name: 'Base',
+      notes: '',
       revenue: [
-        {
-          ...createEmptyLineItem('Sales, "core"'),
-          fillMode: 'uniform',
-          uniformAmount: 100,
-        },
-        {
-          ...createEmptyLineItem('Sales'),
-          fillMode: 'uniform',
-          uniformAmount: 50,
-        },
-        {
-          ...createEmptyLineItem('Sales'),
-          fillMode: 'uniform',
-          uniformAmount: 25,
-        },
+        { ...createEmptyLineItem('Sales, "core"'), fillMode: 'uniform' as const, uniformAmount: 100 },
       ],
       expenses: [
         {
-          ...createEmptyExpenseLineItem('Materials\nbulk', 'cogs'),
-          fillMode: 'uniform',
+          ...createEmptyExpenseLineItem('Materials\nbulk', 'direct', 'cogs'),
+          fillMode: 'uniform' as const,
           uniformAmount: 40,
         },
-        {
-          ...createEmptyExpenseLineItem('Payroll', 'payroll'),
-          fillMode: 'uniform',
-          uniformAmount: 30,
-        },
       ],
+      funding: [],
     }
-
     const state = {
       schemaVersion: SCHEMA_VERSION,
-      businessName: 'Acme, Inc',
+      businessName: 'Acme',
       startMonth: 0,
       startYear: 2026,
-      startingCash: 1000,
       currency: 'USD' as const,
+      cashBuffer: 0,
+      openingFunds: [createOpeningFund('Opening funds', 'other', 1000)],
       activeScenarioId: 's',
       scenarios: [scenario],
     }
-
     const csv = buildActiveScenarioCsv(state, scenario)
-    expect(csv.startsWith('\uFEFF')).toBe(true)
-    expect(csv).toContain('"Revenue: Sales, ""core"""')
-    expect(csv).toContain('Revenue: Sales')
-    expect(csv).toContain('Revenue: Sales (2)')
-    expect(csv).toContain('"COGS: Materials\nbulk"')
-    expect(csv).toContain('Total revenue')
-    expect(csv).toContain('Gross margin')
     expect(csv).toContain('Ending cash')
-    expect(csvFilename(state, scenario)).toBe('acme,-inc-base-2026-01.csv')
+    expect(csv).toContain('Operating profit')
+    expect(csv).toContain('"Revenue: Sales, ""core"""')
+    expect(csvFilename(state, scenario)).toContain('acme-base-2026-01')
   })
 })
