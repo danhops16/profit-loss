@@ -41,7 +41,6 @@ function App() {
   } = usePlanner()
 
   const [scenarioStatus, setScenarioStatus] = useState<string | null>(null)
-  const [openItemId, setOpenItemId] = useState<string | null>(null)
 
   const summaries = buildSummaries(state)
   const metrics = buildMetrics(summaries, state.openingFunds, state.cashBuffer)
@@ -104,8 +103,6 @@ function App() {
         revenue={activeScenario.revenue}
         expenses={activeScenario.expenses}
         funding={activeScenario.funding}
-        openItemId={openItemId}
-        onOpenItemId={setOpenItemId}
         onAdd={(kind, name, opts) => {
           const map = kind === 'costs' ? 'expenses' : kind
           return addLineItem(map, name, opts)
@@ -121,7 +118,6 @@ function App() {
         onRemove={(kind, id) => {
           const map = kind === 'costs' ? 'expenses' : kind
           removeLineItem(map, id)
-          if (openItemId === id) setOpenItemId(null)
         }}
       />
 
